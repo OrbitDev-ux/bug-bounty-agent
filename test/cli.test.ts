@@ -76,3 +76,52 @@ test("task cancel on a nonexistent task id exits non-zero", () => {
     assert.notEqual(result.status, 0);
   });
 });
+
+test("dashboard status prints program/finding/earnings/metrics/ROI data on an empty database", () => {
+  withTempDb((dbPath) => {
+    const result = runCli(["dashboard", "status"], dbPath);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Programs:/);
+    assert.match(result.stdout, /Findings:/);
+    assert.match(result.stdout, /ROI:/);
+    assert.match(result.stdout, /n\/a \(no tracked runtime yet\)/); // no fabricated revenue/hour
+  });
+});
+
+test("agent pause exits non-zero when the scheduler isn't currently running", () => {
+  withTempDb((dbPath) => {
+    const result = runCli(["agent", "pause"], dbPath);
+    assert.notEqual(result.status, 0);
+  });
+});
+
+test("approval decide reports 'not found' for an unknown approval id", () => {
+  withTempDb((dbPath) => {
+    const result = runCli(["approval", "decide", "does-not-exist", "approve", "--telegram-user-id", "111"], dbPath);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr + result.stdout, /not found/i);
+  });
+});
+
+test("approval decide enforces the allowlist even from the CLI (a non-allowlisted id is refused)", () => {
+  withTempDb((dbPath) => {
+    // Create a bare approval directly against the same DB file (no CLI command
+    // creates one standalone without a full network-touching onboarding flow).
+    const create = spawnSync(
+      "npx",
+      ["tsx", "-e", 'import { createApproval } from "./src/domain/approvals.ts"; console.log(createApproval({ requestedAction: "test" }).id);'],
+      { encoding: "utf8", env: { ...process.env, DATABASE_PATH: dbPath } },
+    );
+    const approvalId = create.stdout.trim();
+    assert.ok(approvalId, `expected an approval id, got stdout=${create.stdout} stderr=${create.stderr}`);
+
+    process.env.TELEGRAM_ALLOWED_USER_IDS = "999";
+    const denied = runCli(["approval", "decide", approvalId, "approve", "--telegram-user-id", "111"], dbPath);
+    assert.notEqual(denied.status, 0);
+    assert.match(denied.stdout, /not authorized/i);
+
+    const approved = runCli(["approval", "decide", approvalId, "approve", "--telegram-user-id", "999"], dbPath);
+    assert.equal(approved.status, 0);
+    delete process.env.TELEGRAM_ALLOWED_USER_IDS;
+  });
+});

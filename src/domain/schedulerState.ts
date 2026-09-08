@@ -44,7 +44,7 @@ export function getSchedulerState(): SchedulerState {
   return rowToState(row);
 }
 
-export interface StartSchedulerInput extends Partial<SchedulerRunLimits> {}
+export type StartSchedulerInput = Partial<SchedulerRunLimits>;
 
 /** RUNNING (project brief section 30/33): resets per-run counters and applies this run's limits. */
 export function startScheduler(input: StartSchedulerInput = {}): SchedulerState {

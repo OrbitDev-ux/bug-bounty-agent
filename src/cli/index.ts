@@ -3,54 +3,109 @@ import { Command } from "commander";
 import { listPrograms, createProgram } from "../domain/programs.js";
 import { listTasks, getTask, cancelTask } from "../domain/tasks.js";
 import { listFindings, getFinding } from "../domain/findings.js";
-import { listApprovals } from "../domain/approvals.js";
-import { summarizeEarnings } from "../domain/earnings.js";
-import { startRun, finishRun, listRuns, listRunningRuns } from "../domain/agentRuns.js";
-import { runDiscovery, onboardProgramFromPolicyPage, finalizeApprovedTask } from "../agent/orchestrator.js";
+import { listApprovals, getApproval } from "../domain/approvals.js";
+import { summarizeEarnings, markAwarded, markPaid, getEarning } from "../domain/earnings.js";
+import { finishRun, listRuns, listRunningRuns } from "../domain/agentRuns.js";
+import { getSchedulerState } from "../domain/schedulerState.js";
+import { runDiscovery, onboardProgramFromPolicyPage, finalizeApprovedTask, runResearchTask, draftReportForApprovedFinding, simulateSubmission } from "../agent/orchestrator.js";
+import { runWorkerLoop, runOnce, pauseAgent, resumeAgent, stopAgent } from "../agent/scheduler.js";
+import { handleApprovalDecision } from "../telegram/approvalHandler.js";
+import { sendDailySummary } from "../telegram/bot.js";
+import { buildDailySummary, formatDailySummaryMessage } from "../telegram/dailySummary.js";
+import { getAgentStatus, getProgramStats, getFindingStats, getRevenueTimeline } from "../services/dashboard.js";
+import { getMetrics, getROI } from "../services/metrics.js";
 import { telegramConfigStatus } from "../config/env.js";
 import * as safari from "../safari/controller.js";
 import { log } from "../logging/logger.js";
 
 const program = new Command();
-program.name("bba").description("Bug Bounty Agent v0.1 CLI").version("0.1.0");
+program.name("bba").description("Bug Bounty Agent v0.2 CLI").version("0.2.0");
 
 // --- agent ---
 const agent = program.command("agent").description("Agent runtime lifecycle");
 
 agent
   .command("start")
-  .description("Record the start of a manual agent run (bookkeeping; does not daemonize)")
-  .action(() => {
-    const run = startRun("manual");
-    log("agent_started", { runId: run.id });
-    console.log(`Agent run started: ${run.id}`);
+  .description("Runs the worker loop (Scheduler -> Planner -> Task -> Result -> Next Task) until the queue is empty or a run limit is hit. Never unbounded.")
+  .option("--daemon", "Use longer default run limits for longer-lived operation — still bounded, see docs/scheduler.md", false)
+  .option("--max-tasks <n>", "Override max tasks this run")
+  .option("--max-runtime-min <n>", "Override max runtime in minutes this run")
+  .option("--max-browser-ops <n>", "Override max Safari operations this run")
+  .option("--max-retries <n>", "Override max recovery retries per task this run")
+  .action(async (opts) => {
     console.log(`Telegram approval gateway: ${telegramConfigStatus()}`);
+    const limits = {
+      maxTasksPerRun: opts.maxTasks ? Number(opts.maxTasks) : opts.daemon ? 100 : undefined,
+      maxRuntimeMs: opts.maxRuntimeMin ? Number(opts.maxRuntimeMin) * 60_000 : opts.daemon ? 8 * 60 * 60 * 1000 : undefined,
+      maxBrowserOps: opts.maxBrowserOps ? Number(opts.maxBrowserOps) : undefined,
+      maxRetries: opts.maxRetries ? Number(opts.maxRetries) : undefined,
+    };
+    const summary = await runWorkerLoop(limits);
+    console.log(`Worker loop finished: ${summary.tasksExecuted} task(s) executed. Stopped: ${summary.stoppedReason}`);
+  });
+
+agent
+  .command("run-once")
+  .description("Runs exactly one task from the queue (or reports there's nothing to do) and exits.")
+  .action(async () => {
+    const result = await runOnce();
+    if (!result.ranTask) {
+      console.log("Nothing to do — queue is empty.");
+      return;
+    }
+    console.log(`Task ${result.taskId}: ${result.outcome}`);
+  });
+
+agent
+  .command("pause")
+  .description("Blocks new task execution. In-flight approvals and queued work are preserved untouched.")
+  .action(() => {
+    const state = pauseAgent();
+    console.log(`Scheduler -> ${state.status}`);
+  });
+
+agent
+  .command("resume")
+  .description("Resumes a paused scheduler.")
+  .action(() => {
+    const state = resumeAgent();
+    console.log(`Scheduler -> ${state.status}`);
   });
 
 agent
   .command("stop")
-  .description("Mark any in-progress agent runs as completed")
+  .description("Stops the scheduler and marks any in-progress manual agent runs as completed (bookkeeping).")
   .action(() => {
+    const state = stopAgent();
     const running = listRunningRuns();
     for (const run of running) {
       finishRun(run.id, "completed", "Stopped via CLI");
       log("agent_stopped", { runId: run.id });
     }
-    console.log(`Stopped ${running.length} running run(s).`);
+    console.log(`Scheduler -> ${state.status}. Closed ${running.length} bookkeeping run(s).`);
   });
 
 agent
   .command("status")
-  .description("Show agent run history and current counts")
-  .action(() => {
+  .description("Show scheduler state, agent run history, and current counts")
+  .action(async () => {
+    const scheduler = getSchedulerState();
+    const status = await getAgentStatus();
+    console.log(`Scheduler: ${scheduler.status.toUpperCase()}`);
+    console.log(`Current task: ${scheduler.currentTaskId ?? "none"}`);
+    console.log(`Browser: ${status.browserAvailable ? "AVAILABLE" : "UNAVAILABLE"}`);
+    console.log(`Last research: ${status.lastResearchGoal ?? "none yet"}`);
+    console.log("");
+
     const runs = listRuns().slice(0, 5);
     console.log("Recent agent runs:");
     for (const r of runs) console.log(`  ${r.id}  ${r.kind}  ${r.status}  started=${r.startedAt}`);
     console.log("");
     console.log(`Programs: ${listPrograms().length}`);
-    console.log(`Tasks: ${listTasks().length} (waiting_approval=${listTasks("waiting_approval").length})`);
+    console.log(`Tasks: ${listTasks().length} (queued=${status.queueDepth}, waiting_approval=${listTasks("waiting_approval").length})`);
     console.log(`Findings: ${listFindings().length}`);
-    console.log(`Pending approvals: ${listApprovals("pending").length}`);
+    console.log(`Pending approvals: ${status.pendingApprovals}`);
+    console.log(`Telegram approval gateway: ${telegramConfigStatus()}`);
   });
 
 // --- program ---
@@ -112,6 +167,22 @@ programCmd
       },
     });
     console.log(`Program created: ${p.id}`);
+  });
+
+programCmd
+  .command("research <programId> <goal>")
+  .description("Runs a full Research Agent session against a program (Safari + Claude), creating candidate findings and requesting approval for each novel one.")
+  .action(async (programId: string, goal: string) => {
+    const result = await runResearchTask({ programId, goal });
+    console.log(`Task ${result.task.id} -> ${result.task.status}`);
+    console.log(`Research session: ${result.sessionId}`);
+    console.log(`Candidate findings created: ${result.findingsCreated.length}`);
+    for (const f of result.findingsCreated) console.log(`  ${f.id}  [${f.status}]  ${f.title}`);
+    console.log(`Cost: $${result.costUsd.toFixed(4)}`);
+    if (!result.ok) {
+      console.error(`Failed: ${result.error}`);
+      process.exitCode = 1;
+    }
   });
 
 // --- task ---
@@ -187,6 +258,36 @@ findingCmd
     console.log(JSON.stringify(f, null, 2));
   });
 
+findingCmd
+  .command("draft-report <id>")
+  .description("Advances an approved candidate finding (candidate -> validated -> report_draft) and drafts its report, then requests final approval.")
+  .action(async (id: string) => {
+    const result = await draftReportForApprovedFinding(id);
+    console.log(`Finding ${result.finding.id} -> ${result.finding.status}`);
+    if (!result.ok) {
+      console.error(`Failed: ${result.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`Report drafted: ${result.report!.id} — "${result.report!.title}"`);
+    console.log(`Cost: $${result.costUsd.toFixed(4)}`);
+    console.log("Final Telegram approval requested (SIMULATED submission gate).");
+  });
+
+findingCmd
+  .command("submit <id>")
+  .description("Records a SIMULATED submission for a finding once its FINAL approval is granted. Never calls a real platform API.")
+  .action((id: string) => {
+    try {
+      const result = simulateSubmission(id);
+      console.log(`Finding ${result.finding.id} -> ${result.finding.status} (submissionMode=${result.finding.submissionMode})`);
+      console.log(`Earning record: ${result.earningId} (bountyStatus=pending)`);
+    } catch (err) {
+      console.error(`Failed: ${(err as Error).message}`);
+      process.exitCode = 1;
+    }
+  });
+
 // --- approval ---
 const approvalCmd = program.command("approval").description("Human approval queue");
 
@@ -197,6 +298,27 @@ approvalCmd
     for (const a of listApprovals(opts.status)) {
       console.log(`${a.id}  [${a.status}]  task=${a.taskId ?? "-"}  finding=${a.findingId ?? "-"}  action="${a.requestedAction}"`);
     }
+  });
+
+approvalCmd
+  .command("decide <id> <decision>")
+  .description("Local fallback for approve|reject when Telegram isn't configured. Still enforces the allowlist via --telegram-user-id.")
+  .requiredOption("--telegram-user-id <id>", "Must be an id in TELEGRAM_ALLOWED_USER_IDS")
+  .action((id: string, decision: string, opts) => {
+    if (decision !== "approve" && decision !== "reject") {
+      console.error('Decision must be "approve" or "reject".');
+      process.exitCode = 1;
+      return;
+    }
+    const approval = getApproval(id);
+    if (!approval) {
+      console.error("Approval not found.");
+      process.exitCode = 1;
+      return;
+    }
+    const result = handleApprovalDecision(id, decision === "approve" ? "approved" : "rejected", opts.telegramUserId);
+    console.log(result.reason);
+    if (!result.ok) process.exitCode = 1;
   });
 
 // --- earnings ---
@@ -213,6 +335,30 @@ earningsCmd
     console.log(`Pending:    $${s.pending.toFixed(2)}  (awarded but not yet paid)`);
   });
 
+earningsCmd
+  .command("award <earningId>")
+  .requiredOption("--amount <amount>", "Bounty amount")
+  .requiredOption("--currency <currency>", "e.g. USD")
+  .description("Records that a bounty was awarded (not yet paid — see `earnings pay`). This is a manual bookkeeping step; v0.2 has no platform API integration.")
+  .action((earningId: string, opts) => {
+    const earning = markAwarded(earningId, { amount: Number(opts.amount), currency: opts.currency });
+    console.log(`Earning ${earning.id} -> awarded ($${earning.amount} ${earning.currency})`);
+  });
+
+earningsCmd
+  .command("pay <earningId>")
+  .description("Records that an already-awarded bounty was actually paid. Only PAID counts toward realized revenue (section 45 — never fabricated).")
+  .action((earningId: string) => {
+    const existing = getEarning(earningId);
+    if (!existing) {
+      console.error("Earning not found.");
+      process.exitCode = 1;
+      return;
+    }
+    const earning = markPaid(earningId);
+    console.log(`Earning ${earning.id} -> paid ($${earning.amount} ${earning.currency})`);
+  });
+
 // --- safari ---
 const safariCmd = program.command("safari").description("Safari MCP controller diagnostics");
 
@@ -227,6 +373,46 @@ safariCmd
       console.error(`FAIL — could not reach Safari via osascript: ${(err as Error).message}`);
       process.exitCode = 1;
     }
+  });
+
+// --- dashboard (backend services, section 37 — no web UI in v0.2) ---
+const dashboardCmd = program.command("dashboard").description("Dashboard backend data, printed to the terminal");
+
+dashboardCmd
+  .command("status")
+  .description("Program/finding/earnings stats, metrics, and ROI (revenue-per-hour only shown when real elapsed agent-run time exists)")
+  .action(() => {
+    const programStats = getProgramStats();
+    const findingStats = getFindingStats();
+    const earnings = summarizeEarnings();
+    const metrics = getMetrics();
+    const roi = getROI();
+    const timeline = getRevenueTimeline();
+
+    console.log("Programs:", JSON.stringify(programStats));
+    console.log("Findings:", JSON.stringify(findingStats));
+    console.log("Earnings (paid-only totals):", JSON.stringify(earnings));
+    console.log("Metrics:", JSON.stringify(metrics));
+    console.log(`ROI: revenue/session=${roi.revenuePerSession ?? "n/a"} revenue/task=${roi.revenuePerTask ?? "n/a"} revenue/hour=${roi.revenuePerHour ?? "n/a (no tracked runtime yet)"}`);
+    console.log(`Revenue timeline (${timeline.length} day(s) with paid revenue):`, JSON.stringify(timeline));
+  });
+
+// --- telegram ---
+const telegramCmd = program.command("telegram").description("Telegram approval gateway utilities");
+
+telegramCmd
+  .command("daily-summary")
+  .description("Sends the daily agent report to Telegram if configured, otherwise prints it locally.")
+  .action(async () => {
+    const summary = buildDailySummary();
+    const text = formatDailySummaryMessage(summary);
+    if (telegramConfigStatus() !== "ready") {
+      console.log("Telegram not configured — printing locally instead:\n");
+      console.log(text);
+      return;
+    }
+    await sendDailySummary();
+    console.log("Daily summary sent to Telegram.");
   });
 
 program.parseAsync(process.argv);

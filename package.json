@@ -1,0 +1,38 @@
+{
+  "name": "bug-bounty-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Human-in-the-loop research automation agent for authorized bug bounty programs.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "bin": {
+    "bba": "./dist/src/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && mkdir -p dist/src/db && cp src/db/schema.sql dist/src/db/schema.sql",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src test scripts",
+    "test": "tsx --test test/**/*.test.ts",
+    "cli": "tsx src/cli/index.ts",
+    "safari-mcp": "tsx src/safari/mcp-server.ts",
+    "telegram-bot": "tsx src/telegram/bot.ts",
+    "e2e:demo": "tsx scripts/e2e-demo.ts",
+    "db:migrate": "tsx src/db/migrate.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "commander": "^15.0.0",
+    "grammy": "^1.46.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@typescript-eslint/eslint-plugin": "^8.20.0",
+    "@typescript-eslint/parser": "^8.20.0",
+    "eslint": "^9.18.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

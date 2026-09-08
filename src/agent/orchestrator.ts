@@ -40,15 +40,19 @@ export interface DiscoveryRunResult {
   costUsd: number;
 }
 
-/** Public research task: no program, no approval needed (section 13). */
-export async function runDiscovery(topic: string): Promise<DiscoveryRunResult> {
-  const task = createTask({ type: "research", target: topic });
-  log("task_created", { taskId: task.id, type: task.type, target: task.target });
-
-  transitionTask(task.id, "running");
+/**
+ * Runs an already-created, program-less discovery task (task.type ===
+ * 'research', task.programId === null). Split out from runDiscovery() so
+ * the Scheduler can dequeue and execute a task a Planner enqueued earlier,
+ * not just a task it creates and runs synchronously itself.
+ */
+export async function executeDiscoveryTask(task: Task): Promise<DiscoveryRunResult> {
+  if (task.status === "queued") {
+    transitionTask(task.id, "running", { timeoutAt: new Date(Date.now() + RESEARCH_TASK_TIMEOUT_MS).toISOString() });
+  }
   log("task_started", { taskId: task.id });
 
-  const result = await researchCandidatePrograms(topic);
+  const result = await researchCandidatePrograms(task.target);
 
   if (!result.ok) {
     transitionTask(task.id, "failed", { failureReason: result.error ?? "Unknown research failure" });
@@ -59,6 +63,13 @@ export async function runDiscovery(topic: string): Promise<DiscoveryRunResult> {
   const completed = transitionTask(task.id, "completed", { result: result.summary });
   log("task_completed", { taskId: task.id, costUsd: result.costUsd });
   return { task: completed, summary: result.summary, costUsd: result.costUsd };
+}
+
+/** Convenience wrapper: creates a fresh program-less discovery task and runs it immediately. No approval needed (section 13). */
+export async function runDiscovery(topic: string): Promise<DiscoveryRunResult> {
+  const task = createTask({ type: "research", target: topic });
+  log("task_created", { taskId: task.id, type: task.type, target: task.target });
+  return executeDiscoveryTask(task);
 }
 
 export interface OnboardResult {
@@ -184,28 +195,29 @@ export interface RunResearchTaskResult {
  * candidate — requests Telegram approval to continue (section 20's Safe
  * Validation Gate).
  */
-export async function runResearchTask(input: {
-  programId: string;
-  goal: string;
-  previousResearchSummary?: string | null;
-}): Promise<RunResearchTaskResult> {
-  const program = getProgram(input.programId);
-  if (!program) throw new Error(`Program not found: ${input.programId}`);
+/**
+ * Runs an already-created research task tied to a program (task.type ===
+ * 'research', task.programId set). Split out from runResearchTask() so the
+ * Scheduler can dequeue and execute a task a Planner enqueued earlier.
+ */
+export async function executeResearchTask(task: Task, previousResearchSummary?: string | null): Promise<RunResearchTaskResult> {
+  if (!task.programId) throw new Error(`Task ${task.id} has no programId — use executeDiscoveryTask() instead.`);
+  const program = getProgram(task.programId);
+  if (!program) throw new Error(`Program not found: ${task.programId}`);
 
-  const task = createTask({ type: "research", programId: program.id, target: input.goal });
-  log("task_created", { taskId: task.id, type: task.type, programId: program.id, target: input.goal });
-
-  const timeoutAt = new Date(Date.now() + RESEARCH_TASK_TIMEOUT_MS).toISOString();
-  transitionTask(task.id, "running", { timeoutAt });
+  if (task.status === "queued") {
+    const timeoutAt = new Date(Date.now() + RESEARCH_TASK_TIMEOUT_MS).toISOString();
+    transitionTask(task.id, "running", { timeoutAt });
+  }
   log("task_started", { taskId: task.id });
 
-  const session = startResearchSession({ programId: program.id, taskId: task.id, goal: input.goal });
-  log("research_session_started", { sessionId: session.id, taskId: task.id, goal: input.goal });
+  const session = startResearchSession({ programId: program.id, taskId: task.id, goal: task.target });
+  log("research_session_started", { sessionId: session.id, taskId: task.id, goal: task.target });
 
   const result = await runResearchSession({
-    goal: input.goal,
+    goal: task.target,
     programContext: { name: program.name, url: program.url, scopeSummary: describeScope(program.policy), policySummary: describePolicy(program.policy) },
-    previousResearchSummary: input.previousResearchSummary,
+    previousResearchSummary,
   });
 
   if (!result.ok || !result.output) {
@@ -241,6 +253,21 @@ export async function runResearchTask(input: {
   log("task_completed", { taskId: task.id, costUsd: result.costUsd });
 
   return { ok: true, task: completed, sessionId: session.id, findingsCreated, costUsd: result.costUsd };
+}
+
+/** Convenience wrapper: creates a fresh program-tied research task and runs it immediately. */
+export async function runResearchTask(input: {
+  programId: string;
+  goal: string;
+  previousResearchSummary?: string | null;
+}): Promise<RunResearchTaskResult> {
+  const program = getProgram(input.programId);
+  if (!program) throw new Error(`Program not found: ${input.programId}`);
+
+  const task = createTask({ type: "research", programId: program.id, target: input.goal });
+  log("task_created", { taskId: task.id, type: task.type, programId: program.id, target: input.goal });
+
+  return executeResearchTask(task, input.previousResearchSummary);
 }
 
 /**

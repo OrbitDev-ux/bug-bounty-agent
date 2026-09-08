@@ -68,7 +68,7 @@ pnpm run cli -- safari status
 ```bash
 pnpm typecheck
 pnpm lint
-pnpm test          # 45 tests, no network required
+pnpm test          # 126 tests, no network required
 pnpm run build
 ```
 
@@ -85,6 +85,22 @@ pnpm run cli -- program add --name "Example Co" --platform HackerOne \
 
 # Full scripted end-to-end demo (see docs/agent.md for a verified transcript):
 pnpm run e2e:demo
+
+# v0.2: full Research Agent session against a real program (creates candidate
+# findings, requests Telegram approval for each novel one):
+pnpm run cli -- program research <programId> "research goal"
+
+# v0.2: synthetic-finding pipeline demo — candidate -> approval -> report
+# draft -> final approval -> SIMULATED submission -> bounty lifecycle,
+# using a fabricated finding (never a real vulnerability):
+pnpm run e2e:synthetic-finding
+
+# v0.2: bounded worker loop (Scheduler -> Planner -> Task -> Result), never
+# unbounded — see docs/scheduler.md for the default run limits:
+pnpm run cli -- agent start
+pnpm run cli -- agent run-once   # exactly one task, then exits
+pnpm run cli -- agent status     # scheduler state + queue + approvals + Safari availability
+pnpm run cli -- dashboard status # program/finding/earnings stats, metrics, ROI
 ```
 
 ## 7. Run the Telegram bot (optional, needs step 2's Telegram vars)
@@ -93,4 +109,5 @@ pnpm run e2e:demo
 pnpm run telegram-bot
 ```
 
-Long-polls for callback taps on approval cards. Ctrl+C to stop.
+Long-polls for callback taps on approval cards (including the v0.2 Finding
+Review card) and responds to `/start`/`/status`. Ctrl+C to stop.

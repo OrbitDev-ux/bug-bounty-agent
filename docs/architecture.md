@@ -12,7 +12,7 @@ bot's long-poll loop), talking to one SQLite file.
 
 ```
                          ┌─────────────────────┐
-                         │         CLI          │  bba agent|program|task|finding|approval|earnings|safari
+                         │         CLI          │  bba agent|program|task|finding|approval|earnings|safari|dashboard|telegram
                          └──────────┬───────────┘
                                     │
                          ┌──────────▼───────────┐
@@ -112,12 +112,40 @@ exists (section 4's "Safari 공개 웹 검색" step). Every other task type
 requires a program, and `Finding.programId` is always required — you can't
 have a finding before you have a program.
 
+## v0.2 additions
+
+v0.1's module boundaries turned out to be the right shape — v0.2 fills them
+in rather than restructuring:
+
+- **Scope Manager -> Scope Intelligence**: `evaluateScope()` now returns
+  ALLOW/DENY/NEEDS_HUMAN_REVIEW instead of a boolean, with policy-freshness
+  awareness. See docs/policy-engine.md.
+- **Researcher -> full Research Agent**: `runResearchSession()` returns the
+  complete structured shape (sources, observations, candidates, confidence,
+  next action) and persists a resumable `ResearchSession` + `SourceEvidence`
+  trail. See docs/research-workflow.md.
+- **New: Duplicate Intelligence** (`src/domain/duplicateDetection.ts`,
+  deterministic, not an LLM call) and **Candidate Finding fields** on
+  `findings` (confidence/duplicate/severity, all advisory). See
+  docs/policy-engine.md and docs/findings.md.
+- **Approval Manager -> replay-safe**: expiry (`Approval.expiresAt`) added
+  alongside v0.1's one-decision-only guarantee. See docs/security.md.
+- **New: Planner + persistent Scheduler** (`src/agent/planner.ts`,
+  `src/agent/scheduler.ts`): a real (bounded, run-limited) worker loop with
+  crash recovery, replacing v0.1's bookkeeping-only `agent start`/`stop`.
+  See docs/scheduler.md.
+- **New: dashboard backend + metrics/ROI services** (`src/services/`) — data
+  functions only, no HTTP server or web UI (out of scope per the brief).
+
 ## Known architectural gaps (see final report "Next Recommended Milestone")
 
-- No persistent background scheduler/daemon — `agent start`/`stop` are
-  bookkeeping only in v0.1 (project brief section 24 explicitly says not to
-  jump straight to 24/7 unattended execution).
+- No OS-level daemonization — `agent start [--daemon]` is a bounded
+  foreground worker-loop run, not a background service with its own process
+  supervision. See docs/scheduler.md.
 - `validate` and `submit` task types exist in the schema but have no
-  execution path yet — intentional (see docs/security.md).
-- Report submission is draft-only; there's no platform API integration
-  (HackerOne/Bugcrowd) to actually submit anything.
+  automated executor — intentional (see docs/security.md); v0.2's
+  `validated` state is reached via human approval, not automated testing.
+- Report submission is always `SIMULATED`; there's no platform API
+  integration (HackerOne/Bugcrowd) to actually submit anything.
+- No web dashboard UI — only the backend data functions the brief asked for
+  (section 37 explicitly scopes v0.2 to preparing that layer, not the UI).

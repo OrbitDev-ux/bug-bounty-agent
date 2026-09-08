@@ -1,6 +1,6 @@
 {
   "name": "bug-bounty-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Human-in-the-loop research automation agent for authorized bug bounty programs.",
   "type": "module",
@@ -19,7 +19,7 @@
     "safari-mcp": "tsx src/safari/mcp-server.ts",
     "telegram-bot": "tsx src/telegram/bot.ts",
     "e2e:demo": "tsx scripts/e2e-demo.ts",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "e2e:synthetic-finding": "tsx scripts/synthetic-finding-e2e.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

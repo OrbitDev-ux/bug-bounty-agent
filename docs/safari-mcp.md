@@ -83,3 +83,16 @@ import("@modelcontextprotocol/sdk/client/index.js").then(async ({Client}) => {
 Tools then appear to Claude as `mcp__safari__safari_open_url`, etc. — see
 `src/agent/researcher.ts` for the exact `--allowedTools` list used and
 docs/agent.md for a verified transcript of Claude actually using it.
+
+## v0.2: SSRF hardening
+
+`safari_open_url`/`safari_search` originally only validated the URL
+*scheme*. The section-40 security audit found this let a prompt-injection
+attempt direct the agent to browse internal network addresses (e.g. the
+cloud metadata IP `169.254.169.254`, or `localhost`) — a confused-deputy SSRF
+vector. `isBlockedHost()` (`src/safari/controller.ts`) now blocks literal
+loopback/private/link-local hostnames and IP ranges before any AppleScript
+call is made; verified live and covered by 6 unit tests
+(`test/safari-url-guard.test.ts`). This is a hostname/IP-pattern check, not
+DNS resolution — it does not catch DNS-rebinding. Full writeup in
+docs/security.md.

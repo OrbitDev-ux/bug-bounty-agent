@@ -83,6 +83,12 @@ export function getReportByFinding(findingId: string): Report | null {
   return row ? rowToReport(row) : null;
 }
 
+export function listReports(): Report[] {
+  const db = getDb();
+  const rows = db.prepare("SELECT * FROM reports ORDER BY created_at DESC").all() as unknown as ReportRow[];
+  return rows.map(rowToReport);
+}
+
 /** Renders the report as the plain-text structure requested in section 22. */
 export function renderReportText(report: Report): string {
   return [

@@ -1,4 +1,4 @@
-import type { Approval } from "../domain/types.js";
+import type { Approval, ScopeVerdict } from "../domain/types.js";
 
 export interface ApprovalMessageContext {
   programName: string;
@@ -45,6 +45,55 @@ export function formatApprovalMessage(approval: Approval, ctx: ApprovalMessageCo
     `Status:\nNeeds Approval`,
     "",
     `Action:\n${ctx.actionDescription}`,
+  ].join("\n");
+}
+
+export function confidenceLabel(confidence: number): "LOW" | "MEDIUM" | "HIGH" {
+  if (confidence >= 0.7) return "HIGH";
+  if (confidence >= 0.4) return "MEDIUM";
+  return "LOW";
+}
+
+function scopeVerdictBadge(verdict: ScopeVerdict): string {
+  if (verdict === "ALLOW") return "✅ IN SCOPE";
+  if (verdict === "DENY") return "❌ OUT OF SCOPE";
+  return "⚠️ NEEDS REVIEW";
+}
+
+export interface FindingReviewContext {
+  findingNumber: string | number;
+  programName: string;
+  target: string;
+  category: string;
+  confidence: number;
+  confidenceReason: string;
+  scopeVerdict: ScopeVerdict;
+  policyAllowed: boolean;
+  requestedAction: string;
+}
+
+/** Renders the Finding Review card from project brief section 17. */
+export function formatFindingReviewMessage(ctx: FindingReviewContext): string {
+  return [
+    "\u{1F50E} FINDING REVIEW",
+    "",
+    `#${ctx.findingNumber}`,
+    "",
+    `Program:\n${ctx.programName}`,
+    "",
+    `Target:\n${ctx.target}`,
+    "",
+    `Category:\n${ctx.category}`,
+    "",
+    `Confidence:\n${confidenceLabel(ctx.confidence)}`,
+    "",
+    `Reason:\n${ctx.confidenceReason}`,
+    "",
+    `Scope:\n${scopeVerdictBadge(ctx.scopeVerdict)}`,
+    "",
+    `Policy:\n${ctx.policyAllowed ? "✅ ALLOWED" : "❌ NOT ALLOWED"}`,
+    "",
+    `Requested Action:\n${ctx.requestedAction}`,
   ].join("\n");
 }
 

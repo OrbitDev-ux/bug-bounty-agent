@@ -30,8 +30,32 @@ function runAppleScript(script: string, args: string[] = []): Promise<string> {
   });
 }
 
-/** Throws if `url` is not http(s) — never lets an MCP tool open javascript:/file:/data: URLs. */
-function assertHttpUrl(url: string): void {
+/**
+ * Blocks literal loopback/private/link-local hosts, including the common
+ * cloud metadata address (169.254.169.254). This is a defense-in-depth
+ * measure against a prompt-injection attempt to direct the agent to browse
+ * internal network resources (security audit section 40 — SSRF). It's a
+ * literal hostname/IP-pattern check, not DNS resolution, so it does not
+ * catch DNS-rebinding (a public hostname that resolves to a private IP at
+ * request time) — that would need a resolve-then-check at the network layer,
+ * which AppleScript-driven Safari doesn't give us a hook for. Documented as
+ * a known limitation in docs/security.md.
+ */
+export function isBlockedHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "0.0.0.0" || h === "::1" || h === "::") return true;
+  if (/^127\./.test(h)) return true; // 127.0.0.0/8
+  if (/^10\./.test(h)) return true; // 10.0.0.0/8
+  if (/^192\.168\./.test(h)) return true; // 192.168.0.0/16
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true; // 172.16.0.0/12
+  if (/^169\.254\./.test(h)) return true; // 169.254.0.0/16 (includes cloud metadata 169.254.169.254)
+  if (/^f[cd][0-9a-f]{2}:/.test(h)) return true; // fc00::/7 unique local
+  if (/^fe[89ab][0-9a-f]:/.test(h)) return true; // fe80::/10 link-local
+  return false;
+}
+
+/** Throws if `url` is not http(s), or resolves to a loopback/private/link-local host. */
+export function assertHttpUrl(url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -40,6 +64,9 @@ function assertHttpUrl(url: string): void {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`Refusing to open non-http(s) URL scheme: ${parsed.protocol}`);
+  }
+  if (isBlockedHost(parsed.hostname)) {
+    throw new Error(`Refusing to open a loopback/private/link-local host: ${parsed.hostname}`);
   }
 }
 

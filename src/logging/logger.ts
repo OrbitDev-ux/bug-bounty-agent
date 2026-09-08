@@ -11,16 +11,25 @@ export type LogEvent =
   | "task_started"
   | "scope_approved"
   | "scope_rejected"
+  | "scope_needs_review"
   | "approval_requested"
   | "approval_granted"
   | "approval_rejected"
+  | "approval_expired"
   | "task_completed"
   | "task_failed"
+  | "task_recovered"
   | "finding_created"
   | "finding_status_changed"
+  | "research_session_started"
+  | "research_session_completed"
   | "report_drafted"
   | "submission_completed"
-  | "earning_updated";
+  | "earning_updated"
+  | "scheduler_started"
+  | "scheduler_stopped"
+  | "scheduler_paused"
+  | "scheduler_resumed";
 
 const SECRET_KEY_PATTERN = /token|secret|key|password|authorization/i;
 

@@ -1,4 +1,4 @@
-import { checkScope, type ScopeDecision } from "../domain/scope.js";
+import { checkScope, evaluateScope, type ScopeDecision, type ScopeVerdictResult } from "../domain/scope.js";
 import { getProgram } from "../domain/programs.js";
 import { log } from "../logging/logger.js";
 
@@ -19,4 +19,19 @@ export function checkTargetInScope(programId: string, target: string): ScopeDeci
   const decision = checkScope(program, target);
   log(decision.allowed ? "scope_approved" : "scope_rejected", { programId, target, reason: decision.reason });
   return decision;
+}
+
+/** v0.2: three-state verdict (ALLOW/DENY/NEEDS_HUMAN_REVIEW), used everywhere the caller needs to distinguish "blocked" from "ask a human". */
+export function evaluateTargetScope(programId: string, target: string): ScopeVerdictResult {
+  const program = getProgram(programId);
+  if (!program) {
+    const result: ScopeVerdictResult = { verdict: "DENY", reason: `Unknown program: ${programId}` };
+    log("scope_rejected", { programId, target, reason: result.reason });
+    return result;
+  }
+
+  const result = evaluateScope(program, target);
+  const event = result.verdict === "ALLOW" ? "scope_approved" : result.verdict === "DENY" ? "scope_rejected" : "scope_needs_review";
+  log(event, { programId, target, reason: result.reason, verdict: result.verdict });
+  return result;
 }

@@ -17,6 +17,12 @@ export interface ProgramPolicy {
   automationAllowed: boolean;
   /** Raw restriction notes copied from the program's policy page, for human review. */
   restrictions: string[];
+  /** Free text, e.g. "60 req/min per IP" — published rate limits, if any. */
+  rateLimits?: string;
+  /** Free text, e.g. "must test with a program-provided test account". */
+  authenticationRequirements?: string;
+  /** Anything else explicitly published that doesn't fit the other fields. */
+  specialRules?: string[];
 }
 
 export interface Program {
@@ -26,6 +32,10 @@ export interface Program {
   url: string;
   policy: ProgramPolicy;
   status: ProgramStatus;
+  /** v0.2: when the published policy was last actually read/confirmed. Optional so v0.1 fixtures/objects remain valid. */
+  policyLastVerifiedAt?: string | null;
+  /** v0.2: sha256 of the policy content, to detect drift on re-verification. */
+  policyHash?: string | null;
   createdAt: string; // ISO 8601
   updatedAt: string;
 }
@@ -54,6 +64,10 @@ export interface Task {
   priority: TaskPriority;
   result: string | null; // JSON-serialized result payload, nullable until completed
   failureReason: string | null;
+  /** v0.2: how many times this task has been recovered/retried after a stale-running timeout. */
+  retryCount: number;
+  /** v0.2: deadline set when the task enters 'running'; the scheduler recovers tasks past this. */
+  timeoutAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -73,6 +87,16 @@ export type FindingStatus =
 
 export type BountyStatus = "not_applicable" | "pending" | "awarded" | "paid";
 
+/**
+ * How a candidate finding compares to existing findings for the same
+ * program. LIKELY_DUPLICATE never auto-advances to the next workflow step
+ * (project brief section 14).
+ */
+export type DuplicateVerdict = "LIKELY_NEW" | "POSSIBLE_DUPLICATE" | "LIKELY_DUPLICATE";
+
+/** v0.2 only ever produces SIMULATED — there is no real platform submission integration. */
+export type SubmissionMode = "SIMULATED" | "LIVE";
+
 export interface Finding {
   id: string;
   programId: string;
@@ -82,6 +106,19 @@ export interface Finding {
   summary: string;
   status: FindingStatus;
   bountyStatus: BountyStatus;
+  /** v0.2 candidate-finding intelligence — all null until an agent-generated candidate sets them. */
+  category: string | null;
+  /** 0.0-1.0, the agent's own self-assessed confidence. Never treated as ground truth. */
+  confidence: number | null;
+  confidenceReason: string | null;
+  duplicateVerdict: DuplicateVerdict | null;
+  duplicateOfFindingId: string | null;
+  /** Suggested only — never auto-finalized. A program's own published severity rubric wins if present. */
+  severityCandidate: string | null;
+  severityReason: string | null;
+  severityConfidence: number | null;
+  researchSessionId: string | null;
+  submissionMode: SubmissionMode | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -98,6 +135,8 @@ export interface Approval {
   telegramMessageId: string | null;
   decidedByTelegramUserId: string | null;
   decidedAt: string | null;
+  /** v0.2: replay/staleness protection — an approval past this can no longer be decided. Null = never expires (legacy rows). */
+  expiresAt: string | null;
   createdAt: string;
 }
 
@@ -143,4 +182,76 @@ export interface AgentRun {
   startedAt: string;
   finishedAt: string | null;
   summary: string | null;
+}
+
+// --- v0.2: Scope Intelligence ---
+
+/**
+ * Three-state scope/policy verdict (project brief section 10). Uncertainty
+ * never resolves to ALLOW — an unclear policy is NEEDS_HUMAN_REVIEW, an
+ * explicit prohibition is DENY.
+ */
+export type ScopeVerdict = "ALLOW" | "DENY" | "NEEDS_HUMAN_REVIEW";
+
+// --- v0.2: Research Agent ---
+
+export type ResearchSessionStatus = "running" | "completed" | "failed";
+
+export interface PageVisited {
+  url: string;
+  title: string;
+  capturedAt: string;
+}
+
+export interface ResearchSession {
+  id: string;
+  /** Null for program-less discovery research (candidate program search). */
+  programId: string | null;
+  taskId: string | null;
+  goal: string;
+  status: ResearchSessionStatus;
+  queries: string[];
+  pagesVisited: PageVisited[];
+  scopeObservations: string;
+  policyObservations: string;
+  summary: string;
+  nextRecommendedAction: string;
+  /** 0.0-1.0, the agent's own confidence in this session's findings. */
+  confidence: number | null;
+  candidateFindingIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SourceType = "OFFICIAL_POLICY" | "OFFICIAL_SCOPE" | "OFFICIAL_PROGRAM" | "PUBLIC_REFERENCE";
+
+export interface SourceEvidence {
+  id: string;
+  researchSessionId: string | null;
+  findingId: string | null;
+  sourceUrl: string;
+  sourceType: SourceType;
+  title: string;
+  relevantExcerpt: string;
+  capturedAt: string;
+}
+
+// --- v0.2: Persistent Scheduler ---
+
+export type SchedulerStatus = "stopped" | "running" | "paused";
+
+export interface SchedulerRunLimits {
+  maxTasksPerRun: number | null;
+  maxRuntimeMs: number | null;
+  maxBrowserOps: number | null;
+  maxRetries: number | null;
+}
+
+export interface SchedulerState extends SchedulerRunLimits {
+  status: SchedulerStatus;
+  currentTaskId: string | null;
+  tasksRunThisRun: number;
+  browserOpsThisRun: number;
+  startedAt: string | null;
+  updatedAt: string;
 }

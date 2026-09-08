@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runMigrations } from "./migrations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -25,6 +26,7 @@ export function getDb(path?: string): DatabaseSync {
 
   const schema = readFileSync(`${__dirname}/schema.sql`, "utf8");
   db.exec(schema);
+  runMigrations(db);
 
   instance = db;
   return db;

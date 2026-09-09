@@ -17,9 +17,10 @@ export interface ScopeVerdictResult {
  * `policyLastVerifiedAt` is actually set — records that never opted into
  * freshness tracking (e.g. plain v0.1 fixtures) are left alone.
  */
-const STALE_POLICY_DAYS = 90;
+export const STALE_POLICY_DAYS = 90;
 
-function isStale(policyLastVerifiedAt: string | null | undefined): boolean {
+/** Exported for reuse by UI layers (Telegram/web) that want to show a staleness warning — see docs/dashboard.md and docs/telegram.md. */
+export function isStale(policyLastVerifiedAt: string | null | undefined): boolean {
   if (!policyLastVerifiedAt) return false;
   const verifiedAt = new Date(policyLastVerifiedAt).getTime();
   if (Number.isNaN(verifiedAt)) return false;

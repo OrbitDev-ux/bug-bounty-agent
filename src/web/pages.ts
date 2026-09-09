@@ -1,4 +1,5 @@
 import { renderPage, card, badge, escapeHtml } from "./layout.js";
+import { isStale } from "../domain/scope.js";
 import { listPrograms, getProgram } from "../domain/programs.js";
 import { listTasks } from "../domain/tasks.js";
 import { listFindings, getFinding } from "../domain/findings.js";
@@ -16,10 +17,10 @@ import { checkHealth } from "../services/health.js";
 import { env } from "../config/env.js";
 import { getDb } from "../db/client.js";
 
+/** UI-only staleness display — stricter than scope.ts's isStale() (which treats "never tracked" as not-stale for backward compat with pre-freshness-tracking records); here, "never verified" is always shown as a warning. */
 function scopeStaleBadge(policyLastVerifiedAt: string | null | undefined): string {
   if (!policyLastVerifiedAt) return badge("NEVER VERIFIED", "needs_review");
-  const ageDays = (Date.now() - new Date(policyLastVerifiedAt).getTime()) / (1000 * 60 * 60 * 24);
-  if (ageDays > 90) return badge("REVERIFICATION REQUIRED", "needs_review");
+  if (isStale(policyLastVerifiedAt)) return badge("REVERIFICATION REQUIRED", "needs_review");
   return badge("fresh", "ok");
 }
 

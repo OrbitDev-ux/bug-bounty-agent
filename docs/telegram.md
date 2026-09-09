@@ -84,6 +84,15 @@ demonstrate the full pipeline even without a configured bot.
   research sessions, candidates, approvals, reports, and bounties **paid**
   (never awarded/pending/simulated) for the day, plus current queue depth.
 
+## v0.3.2: Program Candidate Discovery
+
+`/discover "<topic>"`, `/candidates`, `/candidate <id>` and the
+`[✅ Select] [📄 Details] [📊 Compare] [❌ Cancel]` / enrollment-checklist
+buttons let you find and prepare to enroll in a real public program from
+chat — see docs/program-enrollment.md for the full state machine. The one
+deliberate gap: no Telegram button creates the live, testable program —
+that's `bba program activate-candidate <id>` only.
+
 ## What's verified vs. not
 
 - **Verified (real, no network):** allowlist enforcement, callback-data

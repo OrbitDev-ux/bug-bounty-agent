@@ -145,6 +145,17 @@ tick (see docs/scheduler.md) so expiry isn't only checked reactively.
 | Task injection | PASS — no code path creates a `Task` row from web page content; task creation is always an explicit operator/CLI call. |
 | Unauthorized state change | PASS — no network-exposed write API besides the allowlist-gated Telegram callback handler. |
 
+### Program candidate discovery (v0.3.2) audit additions
+
+| Category | Result |
+|---|---|
+| Unauthorized program selection | PASS — `program_candidates` is structurally isolated from `programs`; no code path creates a `Task` or calls `evaluateScope()` from a candidate id. Only `activateForResearch()` bridges the two, gated on `stage === 'authorized'` and reachable only via CLI. |
+| Live target lock bypass | PASS — `canStartLiveResearch()` is `false` through every stage up to and including `authorized`; verified by test through the entire state machine, not just spot-checked. |
+| Automation-policy "unknown treated as allowed" | PASS — `automationPoints('unknown')` scores below `'allowed'` and above nothing that matters; `evaluateScope()` on the eventual live `Program` still independently requires `automationAllowed: true` regardless of what the candidate stage recorded. |
+| Multi-account / mass signup abuse | N/A by construction — the agent never creates an account, submits a form, or accepts terms anywhere in this feature (see docs/program-enrollment.md "Telegram" section: no button reaches account creation). |
+| Prompt injection via a discovered program's page | PASS — `discoverProgramCandidateLeads()`/`researchProgramCandidate()` reuse the exact same `UNTRUSTED_WEB_CONTENT_NOTICE` and read-only Safari tool set as the existing Research Agent; no new trust surface was introduced. |
+| Credential leakage | PASS — `EligibilityChecks`/enrollment checklist never has a field for password/2FA/payment/identity; `formatEnrollmentChecklist()` states "HUMAN ACTION REQUIRED" and the agent never collects these. |
+
 ## Threat model notes
 
 - The agent trusts the local `claude` CLI's own auth/session — it does not

@@ -13,6 +13,7 @@ import { getSchedulerState } from "../domain/schedulerState.js";
 import { runDiscovery, onboardProgramFromPolicyPage, finalizeApprovedTask, runResearchTask, draftReportForApprovedFinding, simulateSubmission } from "../agent/orchestrator.js";
 import { runWorkerLoop, runOnce, pauseAgent, resumeAgent, stopAgent } from "../agent/scheduler.js";
 import { runStartupRecovery } from "../agent/startupRecovery.js";
+import { installDaemon, uninstallDaemon, getDaemonStatus } from "../agent/daemon.js";
 import { checkHealth } from "../services/health.js";
 import { handleApprovalDecision } from "../telegram/approvalHandler.js";
 import { sendDailySummary } from "../telegram/bot.js";
@@ -140,6 +141,37 @@ agent
     );
     const summary = await runWorkerLoop({});
     console.log(`Worker loop finished: ${summary.tasksExecuted} task(s) executed. Stopped: ${summary.stoppedReason}`);
+  });
+
+// --- agent daemon (launchd, macOS) ---
+const daemonCmd = agent.command("daemon").description("Persistent local runtime via macOS launchd — see docs/daemon.md");
+
+daemonCmd
+  .command("install")
+  .description("Writes a launchd plist and loads it. RunAtLoad=true means this starts the agent running immediately — a deliberate, explicit action.")
+  .action(() => {
+    const result = installDaemon(process.cwd());
+    console.log(`Plist written: ${result.plistPath}`);
+    console.log(`Loaded: ${result.loaded}${result.error ? ` (${result.error})` : ""}`);
+    console.log(`Run \`bba agent daemon status\` to check, \`bba agent daemon uninstall\` to remove.`);
+  });
+
+daemonCmd
+  .command("uninstall")
+  .description("Unloads and removes the launchd plist.")
+  .action(() => {
+    const result = uninstallDaemon();
+    console.log(`Removed: ${result.removed}${result.error ? ` (unload warning: ${result.error})` : ""}`);
+  });
+
+daemonCmd
+  .command("status")
+  .description("Checks whether the launchd plist is installed and registered.")
+  .action(() => {
+    const status = getDaemonStatus();
+    console.log(`Plist installed: ${status.plistInstalled}`);
+    console.log(`Registered with launchd: ${status.registeredWithLaunchd}`);
+    console.log(`PID: ${status.pid ?? "not running"}`);
   });
 
 // --- program ---

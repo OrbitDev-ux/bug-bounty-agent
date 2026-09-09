@@ -17,7 +17,15 @@ import {
   formatGoalDetail,
   formatTasksList,
   mainMenuText,
+  formatCandidatesList,
+  formatCandidateDetail,
+  formatCandidateRecommendation,
+  formatCandidateComparison,
+  formatEnrollmentChecklist,
+  formatEnrollmentStatus,
 } from "../src/telegram/views.js";
+import { createCandidate, recordResearch, selectCandidate, compareCandidates, getCandidate } from "../src/domain/programCandidates.js";
+import { getEnrollmentStatus } from "../src/services/dashboard.js";
 import { createTask } from "../src/domain/tasks.js";
 import { listFindings } from "../src/domain/findings.js";
 import type { Program } from "../src/domain/types.js";
@@ -177,4 +185,74 @@ test("formatTasksList reflects real tasks", () => {
   const text = formatTasksList([{ id: "abcdef12", type: "research", programId: program.id, target: "x", status: "queued", priority: "normal", result: null, failureReason: null, retryCount: 0, timeoutAt: null, createdAt: "", updatedAt: "" }]);
   assert.match(text, /research/);
   assert.match(text, /QUEUED/);
+});
+
+// --- v0.3.2: Program Candidate Discovery views ---
+
+test("formatCandidatesList shows an empty-state hint, then real candidates with their stage", () => {
+  assert.match(formatCandidatesList([]), /None yet/);
+  const c = createCandidate({ name: "Example VDP", platform: "self-hosted", officialUrl: "https://example.com/security" });
+  const text = formatCandidatesList([c]);
+  assert.match(text, /Example VDP/);
+  assert.match(text, /DISCOVERED/);
+});
+
+test("formatCandidateDetail shows UNKNOWN plainly, never as ALLOWED, and flags a stale policy", () => {
+  const c = createCandidate({ name: "Example VDP", platform: "self-hosted", officialUrl: "https://example.com/security" });
+  const text = formatCandidateDetail(c);
+  assert.match(text, /Automation Policy:\nUNKNOWN \(never treated as allowed\)/);
+
+  const researched = recordResearch(c.id, { scopeClarity: "HIGH", automationPolicy: "allowed", publicOrPrivate: "public", verifiedNow: true });
+  const detail2 = formatCandidateDetail(researched);
+  assert.match(detail2, /Automation Policy:\nALLOWED/);
+  assert.doesNotMatch(detail2, /REVERIFICATION_REQUIRED/);
+});
+
+test("formatCandidateRecommendation names the top-scored candidate and lists alternatives", () => {
+  assert.match(formatCandidateRecommendation(0, []), /No candidates researched yet/);
+
+  const best = createCandidate({ name: "Best", platform: "self-hosted", officialUrl: "https://best.example.com" });
+  recordResearch(best.id, { scopeClarity: "HIGH", policyClarity: "HIGH", automationPolicy: "allowed", publicOrPrivate: "public" });
+  const worse = createCandidate({ name: "Worse", platform: "self-hosted", officialUrl: "https://worse.example.com" });
+
+  const ranked = compareCandidates([getCandidate(best.id)!, getCandidate(worse.id)!]);
+  const text = formatCandidateRecommendation(2, ranked);
+  assert.match(text, /Candidates:\n2/);
+  assert.match(text, /Recommended:\nBest/);
+  assert.match(text, /Alternatives:/);
+  assert.match(text, /Worse/);
+  assert.match(text, /not a success\/revenue guarantee/);
+});
+
+test("formatCandidateComparison never sorts by reward alone", () => {
+  const highReward = createCandidate({ name: "HighReward", platform: "self-hosted", officialUrl: "https://hr.example.com" });
+  recordResearch(highReward.id, { rewardTransparency: "HIGH", automationPolicy: "forbidden" });
+  const clear = createCandidate({ name: "Clear", platform: "self-hosted", officialUrl: "https://clear.example.com" });
+  recordResearch(clear.id, { scopeClarity: "HIGH", policyClarity: "HIGH", automationPolicy: "allowed", publicOrPrivate: "public" });
+
+  const ranked = compareCandidates([getCandidate(highReward.id)!, getCandidate(clear.id)!]);
+  const text = formatCandidateComparison(ranked);
+  assert.match(text, /1\. Clear/);
+  assert.match(text, /2\. HighReward/);
+});
+
+test("formatEnrollmentChecklist lists every item unchecked initially and never claims the agent will act for the human", () => {
+  const c = createCandidate({ name: "Example VDP", platform: "self-hosted", officialUrl: "https://example.com/security" });
+  recordResearch(c.id, { scopeClarity: "HIGH" });
+  const selected = selectCandidate(c.id, "op");
+  const text = formatEnrollmentChecklist(selected);
+  assert.match(text, /\[ \] Create platform account/);
+  assert.match(text, /HUMAN ACTION REQUIRED/);
+  assert.match(text, /not independently verified/);
+});
+
+test("formatEnrollmentStatus mirrors the section-21 PENDING/NOT CONFIRMED/BLOCKED shape before enrollment", () => {
+  const c = createCandidate({ name: "Example VDP", platform: "self-hosted", officialUrl: "https://example.com/security" });
+  recordResearch(c.id, { scopeClarity: "HIGH" });
+  selectCandidate(c.id, "op");
+  const status = getEnrollmentStatus(c.id)!;
+  const text = formatEnrollmentStatus(status);
+  assert.match(text, /Enrollment:\nPENDING/);
+  assert.match(text, /Authorization:\nNOT CONFIRMED/);
+  assert.match(text, /Live Testing:\nBLOCKED/);
 });

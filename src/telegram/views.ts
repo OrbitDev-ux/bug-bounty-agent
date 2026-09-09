@@ -10,6 +10,9 @@ import { listPrograms } from "../domain/programs.js";
 import { getProgramAnalytics, type TimelineWindow } from "../services/dashboard.js";
 import { summarizeEarningsByCurrency, listEarnings } from "../domain/earnings.js";
 import type { GoalProgress } from "../domain/goals.js";
+import { needsReverification, type ScoredCandidate } from "../domain/programCandidates.js";
+import type { EnrollmentStatus } from "../services/dashboard.js";
+import type { ProgramCandidate, ProgramCandidateStage } from "../domain/types.js";
 
 export function mainMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
@@ -248,6 +251,168 @@ export function formatGoalDetail(g: GoalProgress): string {
     `Target:\n${g.goal.targetAmount} ${g.goal.targetCurrency}`,
     "",
     `Progress:\n${(g.progressRatio * 100).toFixed(1)}%`,
+  ].join("\n");
+}
+
+// --- Program Candidate Discovery / Enrollment Preparation (v0.3.2) ---
+
+const STAGE_LABEL: Record<ProgramCandidateStage, string> = {
+  discovered: "DISCOVERED",
+  researched: "RESEARCHED",
+  candidate: "CANDIDATE",
+  enrollment_pending: "ENROLLMENT PENDING",
+  authorized: "AUTHORIZED",
+  ready_for_research: "READY FOR RESEARCH",
+};
+
+function checkOrCross(v: boolean): string {
+  return v ? "✅" : "❌";
+}
+
+export function formatCandidatesList(candidates: ProgramCandidate[]): string {
+  const lines = ["🔎 PROGRAM CANDIDATES", "", `Candidates:\n${candidates.length}`, ""];
+  if (candidates.length === 0) {
+    lines.push("None yet. Discover some first (CLI `bba program discover \"<topic>\"`, or ask in /chat).");
+    return lines.join("\n");
+  }
+  for (const c of candidates) {
+    lines.push(`#${c.id.slice(0, 8)} ${c.name} (${c.platform}) — ${STAGE_LABEL[c.stage]}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatCandidateDetail(candidate: ProgramCandidate): string {
+  const e = candidate.eligibility;
+  return [
+    `🔎 ${candidate.name}`,
+    "",
+    `Platform:\n${candidate.platform}`,
+    "",
+    `Stage:\n${STAGE_LABEL[candidate.stage]}`,
+    "",
+    `Public:\n${candidate.publicOrPrivate === "public" ? "✅" : candidate.publicOrPrivate === "private" ? "❌ Private" : "❓ UNKNOWN"}`,
+    "",
+    `Scope Clarity:\n${candidate.scopeClarity}${candidate.scopeSummary ? `\n${candidate.scopeSummary}` : ""}`,
+    "",
+    `Policy Clarity:\n${candidate.policyClarity}${candidate.policySummary ? `\n${candidate.policySummary}` : ""}`,
+    "",
+    `Automation Policy:\n${candidate.automationPolicy.toUpperCase()}${candidate.automationPolicy === "unknown" ? " (never treated as allowed)" : ""}`,
+    "",
+    `Reward Transparency:\n${candidate.rewardTransparency}${candidate.rewardSummary ? `\n${candidate.rewardSummary}` : ""}`,
+    "",
+    "Eligibility:",
+    `  Public program: ${e.publicProgram}`,
+    `  Registration required: ${e.registrationRequired}`,
+    `  Age/eligibility restrictions: ${e.ageOrEligibilityRestrictions}`,
+    `  Geographic restrictions: ${e.geographicRestrictions}`,
+    `  Account required: ${e.accountRequired}`,
+    `  Terms acceptance required: ${e.termsAcceptanceRequired}`,
+    e.notes ? `  Notes: ${e.notes}` : "",
+    "",
+    `Risks:\n${candidate.risks || "None noted."}`,
+    "",
+    `Enrollment Requirements:\n${candidate.enrollmentRequirements || "Not yet researched."}`,
+    "",
+    `Sources:\n${candidate.sources.length}`,
+    candidate.policyLastVerifiedAt && needsReverification(candidate) ? "\n⚠️ REVERIFICATION_REQUIRED — policy last verified over 90 days ago." : "",
+    "",
+    `Official URL:\n${candidate.officialUrl}`,
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
+}
+
+export function formatCandidateRecommendation(candidateCount: number, ranked: ScoredCandidate[]): string {
+  const recommended = ranked[0];
+  const alternatives = ranked.slice(1, 3);
+  const lines = ["🔎 PROGRAM RESEARCH", "", `Candidates:\n${candidateCount}`, ""];
+  if (!recommended) {
+    lines.push("No candidates researched yet.");
+    return lines.join("\n");
+  }
+  const c = recommended.candidate;
+  lines.push(
+    `Recommended:\n${c.name}`,
+    "",
+    `Platform:\n${c.platform}`,
+    "",
+    `Public:\n${checkOrCross(c.publicOrPrivate === "public")}`,
+    "",
+    `Scope Clarity:\n${c.scopeClarity}`,
+    "",
+    `Automation Policy:\n${c.automationPolicy.toUpperCase()}`,
+    "",
+    `Reward Transparency:\n${c.rewardTransparency}`,
+    "",
+    `Score:\n${recommended.score}/100 (decision support only, not a success/revenue guarantee)`,
+    `Why:\n${recommended.reason}`,
+    "",
+  );
+  if (alternatives.length > 0) {
+    lines.push("Alternatives:");
+    for (const alt of alternatives) lines.push(`  ${alt.candidate.name} — ${alt.score}/100`);
+  }
+  return lines.join("\n");
+}
+
+export function formatCandidateComparison(ranked: ScoredCandidate[]): string {
+  const lines = ["📊 PROGRAM COMPARISON", ""];
+  if (ranked.length === 0) {
+    lines.push("No candidates to compare yet.");
+    return lines.join("\n");
+  }
+  ranked.forEach((r, i) => {
+    const c = r.candidate;
+    lines.push(
+      `${i + 1}. ${c.name} (${c.platform}) — ${r.score}/100`,
+      `   Scope:${c.scopeClarity} Policy:${c.policyClarity} Automation:${c.automationPolicy} Reward:${c.rewardTransparency} Public:${c.publicOrPrivate}`,
+      "",
+    );
+  });
+  return lines.join("\n").trimEnd();
+}
+
+export function candidateRecommendationKeyboard(candidateId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("📄 Details", `candidate:details:${candidateId}`)
+    .text("📊 Compare", "candidate:compare")
+    .row()
+    .text("✅ Select", `candidate:select:${candidateId}`)
+    .text("❌ Cancel", `candidate:cancel:${candidateId}`);
+}
+
+export function formatEnrollmentChecklist(candidate: ProgramCandidate): string {
+  const lines = [`📋 ENROLLMENT CHECKLIST`, "", candidate.name, ""];
+  for (const item of candidate.enrollmentChecklist) {
+    lines.push(`[${item.done ? "x" : " "}] ${item.item}`);
+  }
+  lines.push(
+    "",
+    "The agent will never create this account or accept these terms for you — HUMAN ACTION REQUIRED for every item above.",
+    "",
+    "Once you've actually enrolled, tap \"I have enrolled\" below. This records your self-report — it is not independently verified against the platform.",
+  );
+  return lines.join("\n");
+}
+
+export function enrollmentChecklistKeyboard(candidate: ProgramCandidate): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  candidate.enrollmentChecklist.forEach((item, i) => {
+    kb.text(`${item.done ? "☑" : "☐"} ${item.item}`.slice(0, 60), `candidate:checklist:${candidate.id}:${i}`).row();
+  });
+  kb.text("✅ I have enrolled", `candidate:authorize:${candidate.id}`);
+  return kb;
+}
+
+export function formatEnrollmentStatus(status: EnrollmentStatus): string {
+  return [
+    `Program:\n${status.candidate.name}`,
+    "",
+    `Enrollment:\n${status.enrollmentComplete ? "CONFIRMED" : "PENDING"}`,
+    "",
+    `Authorization:\n${status.authorizationConfirmed ? "CONFIRMED (self-reported)" : "NOT CONFIRMED"}`,
+    "",
+    `Live Testing:\n${status.liveTestingBlocked ? "BLOCKED" : "UNBLOCKED"}`,
   ].join("\n");
 }
 

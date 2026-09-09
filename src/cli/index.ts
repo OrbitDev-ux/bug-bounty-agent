@@ -13,6 +13,8 @@ import { bountyAwardedAlert, bountyPaidAlert, goalMilestoneAlert } from "../agen
 import { finishRun, listRuns, listRunningRuns } from "../domain/agentRuns.js";
 import { getSchedulerState } from "../domain/schedulerState.js";
 import { runDiscovery, onboardProgramFromPolicyPage, finalizeApprovedTask, runResearchTask, draftReportForApprovedFinding, simulateSubmission } from "../agent/orchestrator.js";
+import { discoverAndCreateCandidates, researchCandidate, activateCandidateForResearch } from "../services/programResearch.js";
+import { listCandidates, getCandidate, compareCandidates, selectCandidate, confirmAuthorization, cancelCandidate, getSafetyState } from "../domain/programCandidates.js";
 import { runWorkerLoop, runOnce, pauseAgent, resumeAgent, stopAgent } from "../agent/scheduler.js";
 import { runStartupRecovery } from "../agent/startupRecovery.js";
 import { installDaemon, uninstallDaemon, getDaemonStatus } from "../agent/daemon.js";
@@ -252,6 +254,145 @@ programCmd
       console.error(`Failed: ${result.error}`);
       process.exitCode = 1;
     }
+  });
+
+// --- program candidate discovery / enrollment preparation (v0.3.2) ---
+// NOT ENROLLED by default: nothing here ever touches a live target. Only
+// `program activate-candidate` (the final step, after human-confirmed
+// authorization) creates a real, live-testable `programs` row.
+
+programCmd
+  .command("discover <topic>")
+  .description("Searches the public web for candidate bug bounty programs (Safari, read-only) and records each as a new candidate (or dedups against an existing one).")
+  .action(async (topic: string) => {
+    const result = await discoverAndCreateCandidates(topic);
+    if (!result.ok) {
+      console.error(`Discovery failed: ${result.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`Found ${result.created.length} new candidate(s), ${result.deduped} already known.`);
+    for (const c of result.created) console.log(`  ${c.id}  ${c.name}  (${c.platform})  ${c.officialUrl}`);
+    console.log(`Cost: $${result.costUsd.toFixed(4)}`);
+  });
+
+programCmd
+  .command("candidates")
+  .option("--stage <stage>", "Filter by stage (discovered|researched|candidate|enrollment_pending|authorized|ready_for_research)")
+  .description("Lists program candidates and their enrollment stage. NOT the same as `program list` — none of these are live-testable yet.")
+  .action((opts) => {
+    const candidates = listCandidates(opts.stage ? { stage: opts.stage } : {});
+    for (const c of candidates) console.log(`${c.id}  [${c.stage}]  ${c.name}  (${c.platform})`);
+  });
+
+programCmd
+  .command("candidate <id>")
+  .description("Shows one candidate's full researched detail.")
+  .action((id: string) => {
+    const c = getCandidate(id);
+    if (!c) {
+      console.error("Candidate not found.");
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`${c.name}  (${c.platform})  stage=${c.stage}`);
+    console.log(`Official URL: ${c.officialUrl}`);
+    console.log(`Public: ${c.publicOrPrivate}  Automation: ${c.automationPolicy}`);
+    console.log(`Scope clarity: ${c.scopeClarity}  Policy clarity: ${c.policyClarity}  Reward transparency: ${c.rewardTransparency}`);
+    if (c.scopeSummary) console.log(`Scope: ${c.scopeSummary}`);
+    if (c.policySummary) console.log(`Policy: ${c.policySummary}`);
+    if (c.rewardSummary) console.log(`Reward: ${c.rewardSummary}`);
+    console.log(`Eligibility: ${JSON.stringify(c.eligibility)}`);
+    if (c.risks) console.log(`Risks: ${c.risks}`);
+    if (c.enrollmentRequirements) console.log(`Enrollment requirements: ${c.enrollmentRequirements}`);
+    console.log(`Sources: ${c.sources.length}`);
+    const safety = getSafetyState(c);
+    console.log(`Live testing: ${safety.blocked ? `BLOCKED (${safety.reasons.join(", ")})` : "unblocked"}`);
+  });
+
+programCmd
+  .command("compare")
+  .description("Ranks all candidates by decision-support score (never by reward alone — section 10).")
+  .action(() => {
+    const ranked = compareCandidates(listCandidates());
+    if (ranked.length === 0) {
+      console.log("No candidates yet — run `bba program discover \"<topic>\"` first.");
+      return;
+    }
+    ranked.forEach((r, i) => {
+      console.log(`${i + 1}. ${r.candidate.name} (${r.candidate.platform}) — ${r.score}/100`);
+      console.log(`   ${r.reason}`);
+    });
+  });
+
+programCmd
+  .command("research-candidate <id>")
+  .description("Deep-dive research on one candidate (Safari, read-only): scope, policy, automation policy, rewards, eligibility. Never touches a live target.")
+  .action(async (id: string) => {
+    const result = await researchCandidate(id);
+    if (!result.ok || !result.candidate) {
+      console.error(`Research failed: ${result.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`${result.candidate.name} -> stage=${result.candidate.stage}`);
+    console.log(`Scope clarity: ${result.candidate.scopeClarity}  Policy clarity: ${result.candidate.policyClarity}  Automation: ${result.candidate.automationPolicy}`);
+    console.log(`Cost: $${result.costUsd.toFixed(4)}`);
+  });
+
+programCmd
+  .command("select-candidate <id>")
+  .description("Human Selection Gate (section 14): marks one candidate as selected and generates its enrollment checklist. The agent never signs up or accepts terms on your behalf.")
+  .action((id: string) => {
+    try {
+      const updated = selectCandidate(id, "cli-local-operator");
+      console.log(`${updated.name} -> ${updated.stage}`);
+      console.log("Enrollment checklist:");
+      for (const item of updated.enrollmentChecklist) console.log(`  [ ] ${item.item}`);
+      console.log("\nComplete these yourself, then run `bba program authorize-candidate <id>` once you've actually enrolled.");
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exitCode = 1;
+    }
+  });
+
+programCmd
+  .command("authorize-candidate <id>")
+  .description('Records your self-report that you have completed enrollment ("I have enrolled"). This is NEVER independently verified against the platform — see section 18.')
+  .action((id: string) => {
+    try {
+      const updated = confirmAuthorization(id, "cli-local-operator");
+      console.log(`${updated.name} -> ${updated.stage} (self-reported, not independently verified)`);
+      console.log("Live testing is still BLOCKED. Run `bba program activate-candidate <id>` to re-verify the policy and go live.");
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exitCode = 1;
+    }
+  });
+
+programCmd
+  .command("activate-candidate <id>")
+  .description("Authorization Gate / Live Target Lock release (sections 19-20): re-verifies the published policy right now (Safari), then creates the real, live-testable program. Requires the candidate to already be 'authorized'.")
+  .action(async (id: string) => {
+    const result = await activateCandidateForResearch(id);
+    if (!result.ok || !result.result) {
+      console.error(`Activation failed: ${result.error}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`Live program created: ${result.result.program.id} (status=${result.result.program.status})`);
+    console.log(`Candidate ${result.result.candidate.id} -> ${result.result.candidate.stage}, linked to ${result.result.candidate.linkedProgramId}`);
+    console.log(`Cost: $${result.costUsd.toFixed(4)}`);
+  });
+
+programCmd
+  .command("cancel-candidate <id>")
+  .option("--reason <reason>", "Why you're cancelling", "")
+  .description("Cancels a candidate before enrollment. Refuses once it's already been activated into a live program.")
+  .action((id: string, opts) => {
+    const result = cancelCandidate(id, opts.reason);
+    console.log(result.reason);
+    if (!result.ok) process.exitCode = 1;
   });
 
 // --- task ---

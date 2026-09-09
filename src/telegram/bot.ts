@@ -21,6 +21,8 @@ import { listGoalProgress } from "../domain/goals.js";
 import { getSettings, updateSettings, setQuietUntil } from "../domain/settings.js";
 import { getSchedulerState } from "../domain/schedulerState.js";
 import { listResearchSessions } from "../domain/researchSessions.js";
+import { listCandidates, getCandidate, compareCandidates, selectCandidate, cancelCandidate, toggleChecklistItem, confirmAuthorization } from "../domain/programCandidates.js";
+import { discoverAndCreateCandidates } from "../services/programResearch.js";
 import { buildDailySummary, formatDailySummaryMessage, buildWeeklySummary, formatWeeklySummaryMessage } from "./dailySummary.js";
 import { handleChatText, switchToFreechat, switchToAgentChat, confirmControlAction } from "./chatHandler.js";
 import {
@@ -37,6 +39,12 @@ import {
   formatAnalytics,
   formatGoalsList,
   formatTasksList,
+  formatCandidatesList,
+  formatCandidateDetail,
+  formatCandidateComparison,
+  formatEnrollmentChecklist,
+  enrollmentChecklistKeyboard,
+  candidateRecommendationKeyboard,
   EARNINGS_PERIODS,
   type EarningsPeriod,
   type FindingFilter,
@@ -70,7 +78,10 @@ const HELP_TEXT = [
   "/tasks — task queue",
   "/findings — findings (filterable, paginated)",
   "/approvals — pending approvals (with buttons)",
-  "/programs — tracked programs",
+  "/programs — tracked (live, enrolled) programs",
+  "/discover <topic> — search for public bug bounty programs (no live testing until you enroll)",
+  "/candidates — programs found so far, with enrollment stage",
+  "/candidate <id> — one candidate's researched detail + Select/Compare/Cancel",
   "/earnings [today|week|month|lastmonth|90d|all] — revenue",
   "/analytics — funnel, conversion rates, top program/category",
   "/goals — revenue goal progress",
@@ -143,6 +154,31 @@ function wireHandlers(b: Bot): void {
     const program = ref ? listPrograms().find((p) => p.id === ref || p.id.startsWith(ref) || p.name.toLowerCase() === ref.toLowerCase()) : undefined;
     if (!program) return void ctx.reply("Usage: /program <id-or-name> — see /programs for the list.");
     await ctx.reply(formatProgramDetail(program));
+  });
+
+  b.command("discover", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    const topic = ctx.match?.toString().trim();
+    if (!topic) return void ctx.reply('Usage: /discover "<topic>" — e.g. /discover public bug bounty program automation friendly');
+    await ctx.reply(`Searching for public programs on: "${topic}"... this reads real public web pages via Safari and can take a minute or two.`);
+    const result = await discoverAndCreateCandidates(topic);
+    if (!result.ok) return void ctx.reply(`Discovery failed: ${result.error ?? "unknown error"}`);
+    await ctx.reply(
+      `Found ${result.created.length} new candidate(s), ${result.deduped} already known. Use /candidates to see them, or /candidate <id> to research one in depth.\nCost: $${result.costUsd.toFixed(4)}`,
+    );
+  });
+
+  b.command("candidates", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    await ctx.reply(formatCandidatesList(listCandidates()));
+  });
+
+  b.command("candidate", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    const ref = ctx.match?.toString().trim();
+    const candidate = ref ? listCandidates({ includeCancelled: true }).find((c) => c.id === ref || c.id.startsWith(ref)) : undefined;
+    if (!candidate) return void ctx.reply("Usage: /candidate <id-or-prefix> — see /candidates for the list.");
+    await ctx.reply(formatCandidateDetail(candidate), { reply_markup: candidateRecommendationKeyboard(candidate.id) });
   });
 
   b.command("earnings", async (ctx) => {
@@ -232,6 +268,68 @@ function wireHandlers(b: Bot): void {
       if (!requireAllowlisted(ctx.from.id)) return void ctx.answerCallbackQuery({ text: "Not authorized." });
       await ctx.answerCallbackQuery();
       await editFindingsPage(ctx, findingsPageMatch[2] as FindingFilter, Number(findingsPageMatch[1]));
+      return;
+    }
+
+    // Program candidate discovery / enrollment (v0.3.2, sections 13-18).
+    if (data.startsWith("candidate:")) {
+      if (!requireAllowlisted(ctx.from.id)) return void ctx.answerCallbackQuery({ text: "Not authorized." });
+      const parts = data.split(":");
+      const kind = parts[1];
+      const telegramUserId = String(ctx.from.id);
+
+      if (kind === "compare") {
+        await ctx.answerCallbackQuery();
+        await ctx.reply(formatCandidateComparison(compareCandidates(listCandidates())));
+        return;
+      }
+      if (kind === "details") {
+        const candidate = getCandidate(parts[2]!);
+        await ctx.answerCallbackQuery();
+        if (!candidate) return void ctx.reply("Candidate not found.");
+        await ctx.reply(formatCandidateDetail(candidate), { reply_markup: candidateRecommendationKeyboard(candidate.id) });
+        return;
+      }
+      if (kind === "select") {
+        try {
+          const updated = selectCandidate(parts[2]!, telegramUserId);
+          await ctx.answerCallbackQuery({ text: "Selected — enrollment checklist below." });
+          await ctx.reply(formatEnrollmentChecklist(updated), { reply_markup: enrollmentChecklistKeyboard(updated) });
+        } catch (err) {
+          await ctx.answerCallbackQuery({ text: (err as Error).message, show_alert: true });
+        }
+        return;
+      }
+      if (kind === "cancel") {
+        const result = cancelCandidate(parts[2]!, `Cancelled via Telegram by ${telegramUserId}`);
+        await ctx.answerCallbackQuery({ text: result.reason });
+        return;
+      }
+      if (kind === "checklist") {
+        try {
+          const updated = toggleChecklistItem(parts[2]!, Number(parts[3]));
+          await ctx.answerCallbackQuery();
+          if (ctx.callbackQuery.message) {
+            await ctx.editMessageText(formatEnrollmentChecklist(updated), { reply_markup: enrollmentChecklistKeyboard(updated) });
+          }
+        } catch (err) {
+          await ctx.answerCallbackQuery({ text: (err as Error).message, show_alert: true });
+        }
+        return;
+      }
+      if (kind === "authorize") {
+        try {
+          const updated = confirmAuthorization(parts[2]!, telegramUserId);
+          await ctx.answerCallbackQuery({ text: "Recorded as self-reported enrollment. Not independently verified." });
+          await ctx.reply(
+            `✅ ${updated.name} marked AUTHORIZED (self-reported by you, not independently verified).\n\nLive research is still BLOCKED until the final activation step, which re-verifies the published policy and is done from the CLI: \`bba program activate-candidate ${updated.id}\`.`,
+          );
+        } catch (err) {
+          await ctx.answerCallbackQuery({ text: (err as Error).message, show_alert: true });
+        }
+        return;
+      }
+      await ctx.answerCallbackQuery();
       return;
     }
 
@@ -340,7 +438,9 @@ async function handleMenuSelection(ctx: any, item: string): Promise<void> {
       await ctx.reply(switchToAgentChat(String(ctx.from.id)));
       return;
     case "research":
-      await ctx.reply("Kick off research from the CLI (`bba program research <id> \"<goal>\"`) or ask in /chat, e.g. \"새 프로그램 조사해줘\".");
+      await ctx.reply(
+        'Not enrolled in a real program yet? Use /discover "<topic>" to find public candidates, then /candidates to review them.\n\nAlready have a program? Kick off research from the CLI (`bba program research <id> "<goal>"`) or ask in /chat.',
+      );
       return;
     case "approvals": {
       const pending = listApprovals("pending");

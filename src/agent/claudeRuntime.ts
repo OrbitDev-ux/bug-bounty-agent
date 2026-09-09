@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { env } from "../config/env.js";
+import { getSettings } from "../domain/settings.js";
 
 /**
  * Thin wrapper around the local `claude` CLI in non-interactive mode
@@ -54,7 +55,11 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
     "json",
     "--no-session-persistence",
     "--model",
-    opts.model ?? env.claudeModel,
+    // Precedence: explicit call-site override > live operator setting
+    // (/settings, `bba settings set`) > .env default. The settings row
+    // always has a value (getSettings() seeds defaults on first read), so
+    // env.claudeModel is really just the seed for that default.
+    opts.model ?? getSettings().aiModel ?? env.claudeModel,
     "--max-budget-usd",
     String(opts.maxBudgetUsd ?? env.claudeMaxBudgetUsd),
   ];

@@ -5,6 +5,9 @@ import { listTasks, getTask, cancelTask } from "../domain/tasks.js";
 import { listFindings, getFinding } from "../domain/findings.js";
 import { listApprovals, getApproval } from "../domain/approvals.js";
 import { summarizeEarnings, markAwarded, markPaid, getEarning } from "../domain/earnings.js";
+import { recordRevenueAudit } from "../domain/revenueAudit.js";
+import { createGoal, listGoalProgress } from "../domain/goals.js";
+import { recordCost } from "../domain/costs.js";
 import { finishRun, listRuns, listRunningRuns } from "../domain/agentRuns.js";
 import { getSchedulerState } from "../domain/schedulerState.js";
 import { runDiscovery, onboardProgramFromPolicyPage, finalizeApprovedTask, runResearchTask, draftReportForApprovedFinding, simulateSubmission } from "../agent/orchestrator.js";
@@ -370,24 +373,79 @@ earningsCmd
   .command("award <earningId>")
   .requiredOption("--amount <amount>", "Bounty amount")
   .requiredOption("--currency <currency>", "e.g. USD")
-  .description("Records that a bounty was awarded (not yet paid — see `earnings pay`). This is a manual bookkeeping step; v0.2 has no platform API integration.")
+  .option("--who <who>", "Telegram user id or operator name, for the revenue audit trail", "cli-local-operator")
+  .option("--reason <reason>", "Why — e.g. 'program confirmed via email'", "")
+  .description("Records that a bounty was awarded (not yet paid — see `earnings pay`). This is a manual bookkeeping step; there is no platform API integration.")
   .action((earningId: string, opts) => {
+    const before = getEarning(earningId);
     const earning = markAwarded(earningId, { amount: Number(opts.amount), currency: opts.currency });
+    recordRevenueAudit({
+      earningId,
+      who: opts.who,
+      what: "marked awarded",
+      source: "cli",
+      previousValue: before ? { bountyStatus: before.bountyStatus, amount: before.amount, currency: before.currency } : null,
+      newValue: { bountyStatus: "awarded", amount: earning.amount, currency: earning.currency },
+      reason: opts.reason,
+    });
     console.log(`Earning ${earning.id} -> awarded ($${earning.amount} ${earning.currency})`);
   });
 
 earningsCmd
   .command("pay <earningId>")
-  .description("Records that an already-awarded bounty was actually paid. Only PAID counts toward realized revenue (section 45 — never fabricated).")
-  .action((earningId: string) => {
+  .option("--verification-source <source>", "How this was confirmed (e.g. 'checked HackerOne dashboard 2026-09-09'). Omit to leave UNVERIFIED.")
+  .option("--who <who>", "Telegram user id or operator name, for the revenue audit trail", "cli-local-operator")
+  .description("Records that an already-awarded bounty was actually paid. Only PAID counts toward realized revenue (section 45 — never fabricated). Stays UNVERIFIED unless --verification-source is given.")
+  .action((earningId: string, opts) => {
     const existing = getEarning(earningId);
     if (!existing) {
       console.error("Earning not found.");
       process.exitCode = 1;
       return;
     }
-    const earning = markPaid(earningId);
-    console.log(`Earning ${earning.id} -> paid ($${earning.amount} ${earning.currency})`);
+    const earning = markPaid(earningId, opts.verificationSource);
+    recordRevenueAudit({
+      earningId,
+      who: opts.who,
+      what: "marked paid",
+      source: "cli",
+      previousValue: { bountyStatus: existing.bountyStatus },
+      newValue: { bountyStatus: "paid", verificationStatus: earning.verificationStatus },
+      reason: opts.verificationSource ?? "",
+    });
+    console.log(`Earning ${earning.id} -> paid ($${earning.amount} ${earning.currency}), verification=${earning.verificationStatus}`);
+  });
+
+earningsCmd
+  .command("goal-add <name>")
+  .requiredOption("--target <amount>", "Target amount")
+  .requiredOption("--currency <currency>", "e.g. USD or KRW")
+  .description("Adds a revenue goal. Progress is computed from PAID earnings only, in this exact currency.")
+  .action((name: string, opts) => {
+    const goal = createGoal({ name, targetAmount: Number(opts.target), targetCurrency: opts.currency });
+    console.log(`Goal created: ${goal.id} — ${goal.name} (${goal.targetAmount} ${goal.targetCurrency})`);
+  });
+
+earningsCmd
+  .command("goals")
+  .description("Lists active goals with progress (PAID / target, same currency only).")
+  .action(() => {
+    for (const g of listGoalProgress()) {
+      const pct = Math.round(g.progressRatio * 100);
+      console.log(`${g.goal.name}: ${g.paidInGoalCurrency} / ${g.goal.targetAmount} ${g.goal.targetCurrency} (${pct}%)`);
+    }
+  });
+
+earningsCmd
+  .command("cost-add")
+  .requiredOption("--category <category>", "claude_api | infrastructure | hosting | other")
+  .requiredOption("--amount <amount>", "Amount")
+  .option("--currency <currency>", "Currency", "USD")
+  .option("--note <note>", "Note", "")
+  .description("Records a real, measured cost (never an estimate) toward Net Revenue.")
+  .action((opts) => {
+    const cost = recordCost({ category: opts.category, amount: Number(opts.amount), currency: opts.currency, note: opts.note });
+    console.log(`Cost recorded: ${cost.id} — ${cost.category} ${cost.amount} ${cost.currency}`);
   });
 
 // --- safari ---
@@ -426,6 +484,15 @@ dashboardCmd
     console.log("Metrics:", JSON.stringify(metrics));
     console.log(`ROI: revenue/session=${roi.revenuePerSession ?? "n/a"} revenue/task=${roi.revenuePerTask ?? "n/a"} revenue/hour=${roi.revenuePerHour ?? "n/a (no tracked runtime yet)"}`);
     console.log(`Revenue timeline (${timeline.length} day(s) with paid revenue):`, JSON.stringify(timeline));
+  });
+
+dashboardCmd
+  .command("serve")
+  .description("Starts the web dashboard (binds to 127.0.0.1 only — see docs/dashboard.md)")
+  .option("--port <port>", "Port to listen on", "4173")
+  .action(async (opts) => {
+    const { startWebDashboard } = await import("../web/server.js");
+    startWebDashboard(Number(opts.port));
   });
 
 // --- telegram ---

@@ -4,9 +4,10 @@ import { freshDb } from "./testDb.js";
 import { createProgram } from "../src/domain/programs.js";
 import { createFinding, transitionFinding, setCandidateIntelligence } from "../src/domain/findings.js";
 import { createEarning, markAwarded, markPaid } from "../src/domain/earnings.js";
-import { getProgramStats, getFindingStats, getRevenueTimeline } from "../src/services/dashboard.js";
+import { getProgramStats, getFindingStats, getRevenueTimeline, getProgramCandidates, getProgramComparison, getEnrollmentStatus, getSelectedProgram } from "../src/services/dashboard.js";
 import { getMetrics, getROI } from "../src/services/metrics.js";
 import { buildDailySummary } from "../src/telegram/dailySummary.js";
+import { createCandidate, recordResearch, selectCandidate } from "../src/domain/programCandidates.js";
 import type { Program } from "../src/domain/types.js";
 
 let program: Program;
@@ -79,4 +80,48 @@ test("buildDailySummary never reports simulated/pending amounts as bounties paid
 
   const summary = buildDailySummary();
   assert.equal(summary.bountiesPaidToday, 0);
+});
+
+// --- v0.3.2: Program Candidate Discovery dashboard/Telegram single-source-of-truth ---
+
+test("getProgramCandidates returns candidates, optionally filtered by stage — never the live `programs` table", () => {
+  createCandidate({ name: "C1", platform: "self-hosted", officialUrl: "https://c1.example.com" });
+  const c2 = createCandidate({ name: "C2", platform: "self-hosted", officialUrl: "https://c2.example.com" });
+  recordResearch(c2.id, { scopeClarity: "HIGH" });
+
+  assert.equal(getProgramCandidates().length, 2);
+  assert.equal(getProgramCandidates("discovered").length, 1);
+  assert.equal(getProgramCandidates("candidate").length, 1);
+});
+
+test("getProgramComparison ranks candidates and matches domain compareCandidates()", () => {
+  const c1 = createCandidate({ name: "C1", platform: "self-hosted", officialUrl: "https://c1.example.com" });
+  recordResearch(c1.id, { scopeClarity: "HIGH", policyClarity: "HIGH", automationPolicy: "allowed", publicOrPrivate: "public" });
+  const comparison = getProgramComparison();
+  assert.equal(comparison.candidateCount, 1);
+  assert.equal(comparison.ranked[0]!.candidate.id, c1.id);
+});
+
+test("getEnrollmentStatus reports Enrollment/Authorization/Live Testing exactly like the section-21 Telegram shape", () => {
+  const c = createCandidate({ name: "C", platform: "self-hosted", officialUrl: "https://c.example.com" });
+  recordResearch(c.id, { scopeClarity: "HIGH" });
+  selectCandidate(c.id, "op");
+
+  const status = getEnrollmentStatus(c.id)!;
+  assert.equal(status.enrollmentComplete, false); // checklist just generated, nothing checked yet
+  assert.equal(status.authorizationConfirmed, false);
+  assert.equal(status.liveTestingBlocked, true);
+});
+
+test("getEnrollmentStatus returns null for an unknown candidate id", () => {
+  assert.equal(getEnrollmentStatus("nonexistent"), null);
+});
+
+test("getSelectedProgram returns null until a candidate has actually been selected", () => {
+  assert.equal(getSelectedProgram(), null);
+  const c = createCandidate({ name: "C", platform: "self-hosted", officialUrl: "https://c.example.com" });
+  recordResearch(c.id, { scopeClarity: "HIGH" });
+  assert.equal(getSelectedProgram(), null, "researched but not yet selected");
+  selectCandidate(c.id, "op");
+  assert.equal(getSelectedProgram()!.id, c.id);
 });

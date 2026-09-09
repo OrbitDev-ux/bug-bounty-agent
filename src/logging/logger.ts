@@ -34,7 +34,14 @@ export type LogEvent =
   | "startup_recovery"
   | "health_check"
   | "chat_intent_classified"
-  | "chat_mode_changed";
+  | "chat_mode_changed"
+  | "candidate_discovery_completed"
+  | "candidate_research_completed"
+  | "candidate_research_failed"
+  | "candidate_selected"
+  | "candidate_authorized"
+  | "candidate_activated"
+  | "candidate_cancelled";
 
 const SECRET_KEY_PATTERN = /token|secret|key|password|authorization/i;
 

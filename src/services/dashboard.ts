@@ -10,8 +10,9 @@ import { listReports } from "../domain/reports.js";
 import { summarizeEarnings, listEarnings, type EarningsSummary } from "../domain/earnings.js";
 import { getSchedulerState } from "../domain/schedulerState.js";
 import { listResearchSessions } from "../domain/researchSessions.js";
+import { listCandidates, compareCandidates, type ScoredCandidate } from "../domain/programCandidates.js";
 import * as safari from "../safari/controller.js";
-import type { Task, Approval, Program, Finding, Earning } from "../domain/types.js";
+import type { Task, Approval, Program, Finding, Earning, ProgramCandidate } from "../domain/types.js";
 
 export interface AgentStatusSummary {
   schedulerStatus: string;
@@ -185,4 +186,49 @@ export function getProgramAnalytics(programId: string): ProgramAnalytics {
     medianBountyByCurrency,
     largestBountyByCurrency,
   };
+}
+
+// --- v0.3.2: Program Candidate Discovery (single source of truth for both
+// Telegram and the web dashboard — section 22). Thin wrappers over
+// domain/programCandidates.ts; no calculation logic lives here twice. ---
+
+/** All non-cancelled candidates, most-recently-discovered first (or filtered by stage). */
+export function getProgramCandidates(stage?: ProgramCandidate["stage"]): ProgramCandidate[] {
+  return listCandidates(stage ? { stage } : {});
+}
+
+export interface ProgramComparison {
+  candidateCount: number;
+  ranked: ScoredCandidate[];
+}
+
+/** Section 10/11: every eligible candidate, scored and ranked — never sorted by reward alone. */
+export function getProgramComparison(): ProgramComparison {
+  const candidates = listCandidates();
+  return { candidateCount: candidates.length, ranked: compareCandidates(candidates) };
+}
+
+export interface EnrollmentStatus {
+  candidate: ProgramCandidate;
+  enrollmentComplete: boolean; // every checklist item checked
+  authorizationConfirmed: boolean;
+  liveTestingBlocked: boolean; // section 19 — true until 'ready_for_research' with a linked live Program
+}
+
+/** Section 21: the same "Enrollment: PENDING / Authorization: NOT CONFIRMED" shape used by /programs and /status in Telegram. */
+export function getEnrollmentStatus(candidateId: string): EnrollmentStatus | null {
+  const candidate = listCandidates({ includeCancelled: true }).find((c) => c.id === candidateId);
+  if (!candidate) return null;
+  return {
+    candidate,
+    enrollmentComplete: candidate.enrollmentChecklist.length > 0 && candidate.enrollmentChecklist.every((i) => i.done),
+    authorizationConfirmed: candidate.authorizationConfirmedAt !== null,
+    liveTestingBlocked: candidate.stage !== "ready_for_research" || candidate.linkedProgramId === null,
+  };
+}
+
+/** The single candidate currently past [Select] and not yet cancelled — null if nothing has been selected yet. */
+export function getSelectedProgram(): ProgramCandidate | null {
+  const selected = listCandidates().filter((c) => c.selectedAt !== null);
+  return selected[0] ?? null; // listCandidates() is already most-recent-first
 }

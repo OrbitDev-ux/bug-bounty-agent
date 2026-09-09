@@ -289,6 +289,50 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   summary     TEXT
 );
 
+-- v0.3.2: Program candidate discovery / eligibility / enrollment-prep
+-- pipeline. Deliberately a SEPARATE table from `programs` — a
+-- program_candidates row can never be used to create a Task or evaluate
+-- scope; only a real `programs` row (created at the 'ready_for_research'
+-- stage — see src/domain/programCandidates.ts activateForResearch()) is
+-- live-testable. This keeps "no live testing before enrollment" true by
+-- construction, not just by convention.
+CREATE TABLE IF NOT EXISTS program_candidates (
+  id                          TEXT PRIMARY KEY,
+  name                        TEXT NOT NULL,
+  platform                    TEXT NOT NULL,
+  official_url                TEXT NOT NULL,
+  policy_url                  TEXT,
+  canonical_url                TEXT NOT NULL, -- normalized official_url, for dedup (section 25)
+  stage                        TEXT NOT NULL DEFAULT 'discovered',
+  public_or_private            TEXT NOT NULL DEFAULT 'unknown', -- public | private | unknown
+  automation_policy            TEXT NOT NULL DEFAULT 'unknown', -- allowed | forbidden | needs_review | unknown
+  scope_summary                TEXT,
+  scope_clarity                TEXT NOT NULL DEFAULT 'UNKNOWN', -- HIGH | MEDIUM | LOW | UNKNOWN
+  policy_summary               TEXT,
+  policy_clarity                TEXT NOT NULL DEFAULT 'UNKNOWN',
+  reward_summary                TEXT,
+  reward_transparency           TEXT NOT NULL DEFAULT 'UNKNOWN',
+  eligibility_json              TEXT NOT NULL DEFAULT '{}', -- serialized EligibilityChecks; unconfirmed fields stay 'unknown', never guessed
+  risks                         TEXT,
+  sources_json                  TEXT NOT NULL DEFAULT '[]', -- ProgramCandidateSource[]
+  research_session_id           TEXT REFERENCES research_sessions(id),
+  recommendation_score          REAL, -- decision-support only, see computeRecommendationScore()
+  recommendation_reason         TEXT,
+  enrollment_requirements       TEXT,
+  enrollment_checklist_json     TEXT NOT NULL DEFAULT '[]',
+  selected_at                   TEXT, -- human tapped [Select] — section 14
+  selected_by                   TEXT,
+  authorization_confirmed_at    TEXT, -- self-reported "I have enrolled" — section 18, never inferred
+  authorization_confirmed_by    TEXT,
+  cancelled_at                  TEXT,
+  linked_program_id             TEXT REFERENCES programs(id), -- set only at 'ready_for_research'
+  policy_last_verified_at       TEXT,
+  created_at                    TEXT NOT NULL,
+  updated_at                    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_program_candidates_stage ON program_candidates(stage);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_program_candidates_canonical_url ON program_candidates(canonical_url);
+
 -- Append-only audit trail. Never store secrets in `detail`.
 CREATE TABLE IF NOT EXISTS agent_logs (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

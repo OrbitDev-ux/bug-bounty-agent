@@ -376,6 +376,98 @@ export interface AgentSettings {
 
 // --- v0.3: Health Monitoring ---
 
+// --- v0.3.2: Program Candidate Discovery / Enrollment Preparation ---
+
+/**
+ * Program-candidate lifecycle (project brief section 30). Separate from
+ * ProgramStatus entirely — a candidate never becomes live-testable by
+ * changing this field; only activateForResearch() (stage ===
+ * 'ready_for_research') creates a real Program row. "SELECTED_PENDING_
+ * ENROLLMENT" and "ENROLLMENT_PENDING" from the brief denote the same real
+ * state (selected, not yet enrolled) and are modeled as one stored stage,
+ * 'enrollment_pending', set the moment a human taps [Select].
+ */
+export type ProgramCandidateStage =
+  | "discovered"
+  | "researched"
+  | "candidate"
+  | "enrollment_pending"
+  | "authorized"
+  | "ready_for_research";
+
+/** Never guessed — UNKNOWN unless a check explicitly confirmed it (section 6). */
+export type ClarityLevel = "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+
+/** "unknown" is never treated as "allowed" (section 8). */
+export type AutomationPolicyStatus = "allowed" | "forbidden" | "needs_review" | "unknown";
+
+export type PublicOrPrivate = "public" | "private" | "unknown";
+
+export type TriState = "yes" | "no" | "unknown";
+
+/** Structured version of the section-6 eligibility checklist. Every field defaults to "unknown" — never guessed. */
+export interface EligibilityChecks {
+  publicProgram: TriState;
+  registrationRequired: TriState;
+  ageOrEligibilityRestrictions: TriState;
+  geographicRestrictions: TriState;
+  accountRequired: TriState;
+  termsAcceptanceRequired: TriState;
+  notes: string;
+}
+
+export interface ProgramCandidateSource {
+  url: string;
+  sourceType: SourceType;
+  title: string;
+  excerpt: string;
+}
+
+export interface EnrollmentChecklistItem {
+  item: string;
+  done: boolean;
+}
+
+export interface ProgramCandidate {
+  id: string;
+  name: string;
+  platform: string;
+  officialUrl: string;
+  policyUrl: string | null;
+  /** Normalized officialUrl, used for dedup (section 25) — never shown to a human directly. */
+  canonicalUrl: string;
+  stage: ProgramCandidateStage;
+  publicOrPrivate: PublicOrPrivate;
+  automationPolicy: AutomationPolicyStatus;
+  scopeSummary: string | null;
+  scopeClarity: ClarityLevel;
+  policySummary: string | null;
+  policyClarity: ClarityLevel;
+  rewardSummary: string | null;
+  rewardTransparency: ClarityLevel;
+  eligibility: EligibilityChecks;
+  /** Free-text risk notes for the recommendation report (section 12). */
+  risks: string | null;
+  sources: ProgramCandidateSource[];
+  researchSessionId: string | null;
+  /** Decision-support only — never a claim about real success odds or revenue (section 11). */
+  recommendationScore: number | null;
+  recommendationReason: string | null;
+  enrollmentRequirements: string | null;
+  enrollmentChecklist: EnrollmentChecklistItem[];
+  selectedAt: string | null;
+  selectedBy: string | null;
+  /** Self-reported by the human ("I have enrolled") — never inferred from any other signal (section 18). */
+  authorizationConfirmedAt: string | null;
+  authorizationConfirmedBy: string | null;
+  cancelledAt: string | null;
+  /** Set only once activateForResearch() creates the real, live-testable Program row. */
+  linkedProgramId: string | null;
+  policyLastVerifiedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type HealthStatus = "OK" | "DEGRADED" | "FAILED";
 
 export interface HealthCheckResult {

@@ -5,6 +5,25 @@ if (existsSync(".env")) {
   process.loadEnvFile(".env");
 }
 
+/**
+ * Hard safety switch: Node's test runner sets NODE_TEST_CONTEXT on every
+ * test process (and it propagates to any child process a test spawns via
+ * `env: {...process.env}`, e.g. the CLI subprocess tests). A real
+ * TELEGRAM_BOT_TOKEN from a developer's .env must NEVER reach a test
+ * process — a test exercising the approval/notification code path would
+ * otherwise send a live message to the operator's real Telegram chat.
+ *
+ * Only the token is stripped here, deliberately NOT
+ * TELEGRAM_ALLOWED_USER_IDS — that's a list of numeric ids, not a secret,
+ * and several tests legitimately set it themselves to exercise allowlist
+ * logic without needing a real token. telegramConfigStatus() requires BOTH
+ * to be present to report "ready", so clearing the token alone is already
+ * sufficient to make every send path a no-op during tests.
+ */
+if (process.env.NODE_TEST_CONTEXT) {
+  delete process.env.TELEGRAM_BOT_TOKEN;
+}
+
 function parseAllowedIds(raw: string | undefined): string[] {
   if (!raw) return [];
   return raw

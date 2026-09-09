@@ -21,6 +21,8 @@ interface FindingRow {
   severity_confidence: number | null;
   research_session_id: string | null;
   submission_mode: string | null;
+  submitted_at: string | null;
+  accepted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -45,6 +47,8 @@ function rowToFinding(row: FindingRow): Finding {
     severityConfidence: row.severity_confidence,
     researchSessionId: row.research_session_id,
     submissionMode: row.submission_mode as SubmissionMode | null,
+    submittedAt: row.submitted_at,
+    acceptedAt: row.accepted_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -104,6 +108,8 @@ export function createFinding(input: CreateFindingInput): Finding {
     severityConfidence: null,
     researchSessionId: input.researchSessionId ?? null,
     submissionMode: null,
+    submittedAt: null,
+    acceptedAt: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -159,7 +165,17 @@ export function transitionFinding(id: string, to: FindingStatus): Finding {
 
   const db = getDb();
   const now = new Date().toISOString();
-  db.prepare("UPDATE findings SET status = ?, updated_at = ? WHERE id = ?").run(to, now, id);
+  // Time-to-bounty stamps (section 30): set once, on first arrival, via
+  // COALESCE so a later re-transition through the same status (not possible
+  // today given the transition table, but kept defensive) never overwrites it.
+  db.prepare(
+    `UPDATE findings SET
+       status = ?,
+       submitted_at = COALESCE(submitted_at, ?),
+       accepted_at = COALESCE(accepted_at, ?),
+       updated_at = ?
+     WHERE id = ?`,
+  ).run(to, to === "submitted" ? now : null, to === "accepted" ? now : null, now, id);
 
   const updated = getFinding(id);
   if (!updated) throw new Error(`Finding disappeared during transition: ${id}`);

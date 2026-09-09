@@ -23,6 +23,8 @@ function existingFinding(overrides: Partial<Finding> = {}): Finding {
     severityConfidence: null,
     researchSessionId: null,
     submissionMode: null,
+    submittedAt: null,
+    acceptedAt: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,

@@ -16,6 +16,8 @@ interface EarningRow {
   exchange_rate: number | null;
   rate_source: string | null;
   rate_timestamp: string | null;
+  external_submission_id: string | null;
+  external_bounty_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -35,6 +37,8 @@ function rowToEarning(row: EarningRow): Earning {
     exchangeRate: row.exchange_rate,
     rateSource: row.rate_source,
     rateTimestamp: row.rate_timestamp,
+    externalSubmissionId: row.external_submission_id,
+    externalBountyId: row.external_bounty_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -46,6 +50,9 @@ export interface CreateEarningInput {
   bountyStatus?: BountyStatus;
   amount?: number | null;
   currency?: string | null;
+  /** Dedup identity for a future real platform integration (section 45) — must be unique if set. */
+  externalSubmissionId?: string | null;
+  externalBountyId?: string | null;
 }
 
 export function createEarning(input: CreateEarningInput): Earning {
@@ -65,12 +72,14 @@ export function createEarning(input: CreateEarningInput): Earning {
     exchangeRate: null,
     rateSource: null,
     rateTimestamp: null,
+    externalSubmissionId: input.externalSubmissionId ?? null,
+    externalBountyId: input.externalBountyId ?? null,
     createdAt: now,
     updatedAt: now,
   };
   db.prepare(
-    `INSERT INTO earnings (id, finding_id, program_id, bounty_status, amount, currency, awarded_at, paid_at, verification_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO earnings (id, finding_id, program_id, bounty_status, amount, currency, awarded_at, paid_at, verification_status, external_submission_id, external_bounty_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     earning.id,
     earning.findingId,
@@ -81,10 +90,25 @@ export function createEarning(input: CreateEarningInput): Earning {
     earning.awardedAt,
     earning.paidAt,
     earning.verificationStatus,
+    earning.externalSubmissionId,
+    earning.externalBountyId,
     earning.createdAt,
     earning.updatedAt,
   );
   return earning;
+}
+
+/**
+ * Idempotent lookup-or-create (section 45): if an earning with this external
+ * submission id already exists, returns it unchanged rather than creating a
+ * duplicate. Safe to call repeatedly for the same external event (e.g. a
+ * retried webhook, once a real platform integration exists).
+ */
+export function findOrCreateEarningByExternalSubmissionId(externalSubmissionId: string, input: Omit<CreateEarningInput, "externalSubmissionId">): Earning {
+  const db = getDb();
+  const existingRow = db.prepare("SELECT * FROM earnings WHERE external_submission_id = ?").get(externalSubmissionId) as unknown as EarningRow | undefined;
+  if (existingRow) return rowToEarning(existingRow);
+  return createEarning({ ...input, externalSubmissionId });
 }
 
 export interface MarkAwardedInput {

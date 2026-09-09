@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS findings (
   severity_confidence      REAL,
   research_session_id      TEXT REFERENCES research_sessions(id),
   submission_mode          TEXT,   -- SIMULATED | LIVE (v0.2 only ever writes SIMULATED)
+  -- v0.3.1: time-to-bounty tracking (section 30) — stamped once, the first
+  -- time the finding reaches that status; never recomputed from updated_at,
+  -- which changes on every later edit.
+  submitted_at              TEXT,
+  accepted_at                TEXT,
   created_at               TEXT NOT NULL,
   updated_at               TEXT NOT NULL
 );
@@ -163,19 +168,31 @@ CREATE TABLE IF NOT EXISTS earnings (
   exchange_rate     REAL,
   rate_source       TEXT,
   rate_timestamp    TEXT,
+  -- v0.3.1: idempotent dedup identity for a future real platform integration
+  -- (section 45) — nullable; unique only when actually set (SQLite partial
+  -- unique indexes below), so pre-v0.3.1 rows with NULL never collide.
+  external_submission_id TEXT,
+  external_bounty_id     TEXT,
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_earnings_paid_at ON earnings(paid_at);
+-- NOTE: the unique partial indexes on external_submission_id/external_bounty_id
+-- are created in migrations.ts, not here — on an existing (pre-v0.3.1)
+-- database those columns don't exist yet when this schema.sql block first
+-- runs (CREATE TABLE IF NOT EXISTS is a no-op for an existing table), so
+-- creating the index here would fail. migrations.ts adds the columns first,
+-- then the indexes, in the correct order for both fresh and upgraded DBs.
 
 -- v0.3: real, measured operating costs (never estimated) — see src/services/costs.ts,
 -- which records the actual costUsd every runClaude() call reports.
 CREATE TABLE IF NOT EXISTS costs (
   id          TEXT PRIMARY KEY,
-  category    TEXT NOT NULL, -- claude_api | infrastructure | hosting | other
+  category    TEXT NOT NULL, -- claude_api | infrastructure | hosting | tools | other
   amount      REAL NOT NULL,
   currency    TEXT NOT NULL DEFAULT 'USD',
   note        TEXT NOT NULL DEFAULT '',
+  source      TEXT NOT NULL DEFAULT 'manual', -- 'manual' | 'auto:runClaude' | ...
   incurred_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_costs_incurred_at ON costs(incurred_at);
@@ -190,6 +207,15 @@ CREATE TABLE IF NOT EXISTS goals (
   target_currency TEXT NOT NULL,
   created_at     TEXT NOT NULL,
   archived_at    TEXT
+);
+
+-- v0.3.1: tracks which (goal, threshold) pairs have already fired a Telegram
+-- alert, so 25/50/75/100% each notify exactly once (section 33).
+CREATE TABLE IF NOT EXISTS goal_alert_log (
+  goal_id       TEXT NOT NULL REFERENCES goals(id),
+  threshold_pct INTEGER NOT NULL,
+  notified_at   TEXT NOT NULL,
+  PRIMARY KEY (goal_id, threshold_pct)
 );
 
 -- v0.3: revenue change audit (section 39) — separate from earnings.updated_at
@@ -237,6 +263,19 @@ CREATE TABLE IF NOT EXISTS agent_settings (
   daily_summary_enabled INTEGER NOT NULL DEFAULT 1,
   agent_auto_start      INTEGER NOT NULL DEFAULT 0,
   research_enabled      INTEGER NOT NULL DEFAULT 1,
+  -- v0.3.1: per-category notification toggles (section 47) — each defaults
+  -- on. Critical security/failure alerts (safariUnavailableAlert,
+  -- taskFailedRepeatedlyAlert) deliberately bypass all of these, per
+  -- section 48 ("quiet mode never silences critical alerts").
+  notify_finding_alerts    INTEGER NOT NULL DEFAULT 1,
+  notify_approval_alerts   INTEGER NOT NULL DEFAULT 1,
+  notify_agent_errors      INTEGER NOT NULL DEFAULT 1,
+  notify_bounty_alerts     INTEGER NOT NULL DEFAULT 1,
+  notify_daily_summary     INTEGER NOT NULL DEFAULT 1,
+  notify_weekly_summary    INTEGER NOT NULL DEFAULT 1,
+  notify_goal_alerts       INTEGER NOT NULL DEFAULT 1,
+  -- v0.3.1: quiet mode (section 48) — non-critical alerts suppressed until this timestamp; NULL = not quiet.
+  quiet_until               TEXT,
   updated_at            TEXT NOT NULL
 );
 

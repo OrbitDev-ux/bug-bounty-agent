@@ -34,6 +34,28 @@ export function runMigrations(db: DatabaseSync): void {
   addColumnIfMissing(db, "earnings", "exchange_rate", "REAL");
   addColumnIfMissing(db, "earnings", "rate_source", "TEXT");
   addColumnIfMissing(db, "earnings", "rate_timestamp", "TEXT");
+
+  // v0.3.1
+  addColumnIfMissing(db, "earnings", "external_submission_id", "TEXT");
+  addColumnIfMissing(db, "earnings", "external_bounty_id", "TEXT");
+  // Deferred here (not schema.sql) so the columns above are guaranteed to
+  // exist first on an upgraded database — see the note in schema.sql.
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_earnings_external_submission ON earnings(external_submission_id) WHERE external_submission_id IS NOT NULL");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_earnings_external_bounty ON earnings(external_bounty_id) WHERE external_bounty_id IS NOT NULL");
+
+  addColumnIfMissing(db, "findings", "submitted_at", "TEXT");
+  addColumnIfMissing(db, "findings", "accepted_at", "TEXT");
+
+  addColumnIfMissing(db, "costs", "source", "TEXT NOT NULL DEFAULT 'manual'");
+
+  addColumnIfMissing(db, "agent_settings", "notify_finding_alerts", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "agent_settings", "notify_approval_alerts", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "agent_settings", "notify_agent_errors", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "agent_settings", "notify_bounty_alerts", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "agent_settings", "notify_daily_summary", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "agent_settings", "notify_weekly_summary", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "agent_settings", "notify_goal_alerts", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, "agent_settings", "quiet_until", "TEXT");
 }
 
 function addColumnIfMissing(db: DatabaseSync, table: string, column: string, type: string): void {

@@ -119,6 +119,10 @@ export interface Finding {
   severityConfidence: number | null;
   researchSessionId: string | null;
   submissionMode: SubmissionMode | null;
+  /** v0.3.1: stamped once, the first time the finding reaches 'submitted' — for time-to-bounty analytics (section 30). */
+  submittedAt: string | null;
+  /** v0.3.1: stamped once, the first time the finding reaches 'accepted'. */
+  acceptedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -177,11 +181,14 @@ export interface Earning {
   exchangeRate: number | null;
   rateSource: string | null;
   rateTimestamp: string | null;
+  /** v0.3.1: idempotent dedup identity for a future real platform integration (section 45). Unique when set. */
+  externalSubmissionId: string | null;
+  externalBountyId: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export type CostCategory = "claude_api" | "infrastructure" | "hosting" | "other";
+export type CostCategory = "claude_api" | "infrastructure" | "hosting" | "tools" | "other";
 
 export interface Cost {
   id: string;
@@ -189,6 +196,8 @@ export interface Cost {
   amount: number;
   currency: string;
   note: string;
+  /** Provenance: 'manual' (CLI/dashboard entry) or 'auto:<origin>' (e.g. 'auto:runClaude'). */
+  source: string;
   incurredAt: string;
 }
 
@@ -342,12 +351,26 @@ export type NotificationLevel = "all" | "important" | "none";
  * disabling scope checks, approvals, or policy enforcement — not a missing
  * feature, an intentional omission.
  */
+/** Per-category notification toggles (section 47). Critical alerts (Safari down, repeated task failure) bypass all of these — see alerts.ts. */
+export interface NotificationPreferences {
+  findingAlerts: boolean;
+  approvalAlerts: boolean;
+  agentErrors: boolean;
+  bountyAlerts: boolean;
+  dailySummary: boolean;
+  weeklySummary: boolean;
+  goalAlerts: boolean;
+}
+
 export interface AgentSettings {
   aiModel: string;
   notificationLevel: NotificationLevel;
   dailySummaryEnabled: boolean;
   agentAutoStart: boolean;
   researchEnabled: boolean;
+  notifications: NotificationPreferences;
+  /** Quiet mode (section 48) — non-critical alerts suppressed until this time. Null = not quiet. */
+  quietUntil: string | null;
   updatedAt: string;
 }
 

@@ -84,6 +84,48 @@ Tools then appear to Claude as `mcp__safari__safari_open_url`, etc. — see
 `src/agent/researcher.ts` for the exact `--allowedTools` list used and
 docs/agent.md for a verified transcript of Claude actually using it.
 
+## v0.3.2: dedicated agent window (fixes a real incident)
+
+Every tool above originally operated on `front window` / `current tab of
+front window` — whichever Safari window happened to be frontmost at the OS
+level. In practice this meant the agent's research calls landed new tabs in
+**whatever window the user was actively using**, since that's normally the
+frontmost one. This was caught from real usage: a live session's program
+discovery calls added over 20 research tabs (hackerone.com/directory,
+bounty.github.com pages, Wikipedia, DuckDuckGo searches, a local
+prompt-injection test page) into the user's own browsing window, mixed in
+with their actual tabs (an in-progress signup flow, OAuth device-code login
+pages, a Google Doc, shopping sites).
+
+Fixed by giving the agent its own dedicated Safari window, addressed by
+AppleScript `id` (`ensureAgentWindow()` in `src/safari/controller.ts`) —
+every property-based tool (`safari_open_url`, `safari_search`,
+`safari_current_tab`, `safari_page_text`, `safari_get_links`,
+`safari_find_text`) now targets `window id <n>`, never `front window`.
+AppleScript can read/set another application's window properties without
+that window being frontmost, so these operate silently in the background —
+they no longer touch the user's screen at all. The window id is persisted
+to `data/.safari-agent-window.txt` (gitignored) so a one-off CLI command and
+the long-running Telegram bot reuse the same window instead of each
+spawning a fresh one on every call.
+
+The three GUI-scripting tools (`safari_back`/`safari_forward`/`safari_scroll`)
+are the one exception: OS-level keystrokes can only reach whatever window is
+frontmost, so `withAgentWindowFrontmost()` briefly raises the agent's window,
+sends the keystroke, then restores whatever app was frontmost before —
+disruption limited to the instant of the keystroke, not the whole session.
+These three aren't in the Research Agent's actual tool set
+(`SAFARI_READ_TOOLS` in `src/agent/researcher.ts`), so this path isn't
+exercised by normal research/discovery calls at all.
+
+Verified live: `openUrl()` navigated only the agent's window while two other
+real Safari windows (confirmed via a direct AppleScript window/URL dump)
+were provably untouched — see the session transcript. The ~20 pre-fix
+research tabs were identified by URL pattern and closed with the user's
+explicit permission; the user's own tabs (including two active OAuth
+device-code login flows) were left alone by only matching known
+research-tool URL patterns, never a blanket "close everything."
+
 ## v0.2: SSRF hardening
 
 `safari_open_url`/`safari_search` originally only validated the URL

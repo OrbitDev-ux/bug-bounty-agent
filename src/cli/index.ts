@@ -109,6 +109,11 @@ agent
     const scheduler = getSchedulerState();
     const status = await getAgentStatus();
     console.log(`Scheduler: ${scheduler.status.toUpperCase()}`);
+    console.log(
+      `Worker process: ${status.workerProcessRunning ? `RUNNING (pid ${status.workerProcessPid})` : "NOT RUNNING"}${
+        !status.workerProcessRunning && scheduler.status === "running" ? "  <-- scheduler flag says running, but nothing is actually consuming the queue; run `bba agent start` or Telegram /run" : ""
+      }`,
+    );
     console.log(`Current task: ${scheduler.currentTaskId ?? "none"}`);
     console.log(`Browser: ${status.browserAvailable ? "AVAILABLE" : "UNAVAILABLE"}`);
     console.log(`Last research: ${status.lastResearchGoal ?? "none yet"}`);

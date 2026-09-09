@@ -340,6 +340,7 @@ export type Capability =
   | "READ_PROGRAMS"
   | "CONTROL_AGENT_PAUSE"
   | "CONTROL_AGENT_RESUME"
+  | "CONTROL_AGENT_START"
   | "DECIDE_APPROVAL";
 
 // --- v0.3: Settings ---

@@ -8,5 +8,6 @@ data/*.sqlite-journal
 data/*.sqlite-wal
 data/*.sqlite-shm
 data/.safari-agent-window.txt
+data/.worker.pid
 .DS_Store
 coverage/

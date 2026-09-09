@@ -10,6 +10,7 @@ import { listPrograms } from "../domain/programs.js";
 import { summarizeEarnings, summarizeEarningsByCurrency } from "../domain/earnings.js";
 import { getAgentStatus } from "../services/dashboard.js";
 import { pauseAgent, resumeAgent } from "./scheduler.js";
+import { getWorkerProcessStatus, startBoundedWorkerRun } from "./workerProcess.js";
 import { handleApprovalDecision } from "../telegram/approvalHandler.js";
 import type { Capability } from "../domain/types.js";
 
@@ -61,9 +62,40 @@ export async function executeCapability(capability: Capability, args: Record<str
       }
     }
     case "CONTROL_AGENT_RESUME": {
+      // Un-pausing the scheduler flag alone does nothing if nothing is
+      // actually consuming the queue (a real gap found in this session —
+      // see docs/scheduler.md "Worker process vs. scheduler flag"). So
+      // resume also starts a real, bounded worker process when none is
+      // already alive. resumeScheduler() only succeeds from 'paused' — most
+      // of the time (nothing was ever started) the scheduler is 'stopped',
+      // not 'paused', and that failure must NOT block actually starting a
+      // worker process, since starting one sets the flag correctly itself
+      // (see startScheduler() at the top of runWorkerLoop()).
+      let resumeError: string | null = null;
       try {
-        const state = resumeAgent();
-        return { ok: true, summary: "agent resumed", data: state };
+        resumeAgent();
+      } catch (err) {
+        resumeError = (err as Error).message;
+      }
+
+      const worker = getWorkerProcessStatus();
+      if (worker.running) {
+        return { ok: true, summary: `Worker process already running (pid ${worker.pid}).`, data: worker };
+      }
+      const started = startBoundedWorkerRun();
+      const summary = started.started
+        ? `Worker process started (pid ${started.pid}) — it will run queued tasks until the queue is empty or a bounded limit is hit.`
+        : `Starting a worker process failed: ${started.reason}${resumeError ? ` (scheduler flag: ${resumeError})` : ""}`;
+      return { ok: started.started, summary, data: { resumeError, worker: started } };
+    }
+    case "CONTROL_AGENT_START": {
+      try {
+        const existing = getWorkerProcessStatus();
+        if (existing.running) {
+          return { ok: true, summary: `A worker process is already running (pid ${existing.pid}).`, data: existing };
+        }
+        const started = startBoundedWorkerRun();
+        return { ok: started.started, summary: started.reason, data: started };
       } catch (err) {
         return { ok: false, summary: (err as Error).message };
       }

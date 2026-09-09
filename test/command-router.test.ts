@@ -44,6 +44,15 @@ test("CONTROL_ACTION: resume phrasing", () => {
   assert.equal(intent.capability, "CONTROL_AGENT_RESUME");
 });
 
+test("CONTROL_ACTION: 'start working' phrasing that isn't literally 'resume' maps to CONTROL_AGENT_START", () => {
+  // Real phrasing from a live session that fell through to plain CHAT before
+  // this pattern existed — "다시 시작" (RESUME) requires the words adjacent;
+  // this doesn't have that, so it needs its own pattern.
+  const intent = classifyIntent("이제 버그바운티 작업 시작하자");
+  assert.equal(intent.category, "CONTROL_ACTION");
+  assert.equal(intent.capability, "CONTROL_AGENT_START");
+});
+
 test("APPROVAL_ACTION: '#<id> 승인' resolves to a real pending approval by id prefix", () => {
   const approval = createApproval({ requestedAction: "test" });
   const shortRef = approval.id.slice(0, 8);

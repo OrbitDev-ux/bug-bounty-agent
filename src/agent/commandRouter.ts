@@ -38,7 +38,13 @@ const APPROVAL_PATTERNS: RegExp[] = [
 
 const CONTROL_PATTERNS: Pattern[] = [
   { capability: "CONTROL_AGENT_PAUSE", category: "CONTROL_ACTION", regex: /agent\s*(멈춰|중지|stop|pause)|멈춰|중지해|일시\s*정지/i },
-  { capability: "CONTROL_AGENT_RESUME", category: "CONTROL_ACTION", regex: /재개|다시\s*시작|계속해|resume|restart\b/i },
+  { capability: "CONTROL_AGENT_RESUME", category: "CONTROL_ACTION", regex: /재개|다시\s*시작|resume|restart\b/i },
+  // Broader "just start working" phrasing — matched separately from RESUME
+  // so the reply can say "started" rather than "resumed" when nothing was
+  // paused in the first place. Both capabilities end up doing the same
+  // real thing (ensuring a worker process is actually running) — see
+  // CONTROL_AGENT_RESUME's handler in capabilities.ts.
+  { capability: "CONTROL_AGENT_START", category: "CONTROL_ACTION", regex: /작업\s*시작|일\s*시작|자동화\s*시작|버그바운티.*시작|start\s*(the\s*)?(agent|worker|automation)|계속해/i },
 ];
 
 const READ_PATTERNS: Pattern[] = [

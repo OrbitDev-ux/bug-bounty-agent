@@ -55,8 +55,8 @@ export async function handleChatText(telegramUserId: string, text: string): Prom
   if (intent.category === "CONTROL_ACTION" && intent.capability) {
     // Never execute a control action straight from natural language — ask
     // for explicit confirmation via the same button-based flow approvals use.
-    const actionLabel = intent.capability === "CONTROL_AGENT_PAUSE" ? "pause" : "resume";
-    const reply = `Do you want me to ${actionLabel} the agent?`;
+    const actionLabel = intent.capability === "CONTROL_AGENT_PAUSE" ? "pause" : intent.capability === "CONTROL_AGENT_RESUME" ? "resume" : "start";
+    const reply = `Do you want me to ${actionLabel} the agent? This will actually run a bounded worker process against the current task queue, not just flip a status flag.`;
     appendChatMessage(telegramUserId, "assistant", reply);
     return { text: reply, confirmCallbackData: `control:${intent.capability}:confirm` };
   }

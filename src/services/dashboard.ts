@@ -9,6 +9,7 @@ import { listFindings, listFindingsForProgram } from "../domain/findings.js";
 import { listReports } from "../domain/reports.js";
 import { summarizeEarnings, listEarnings, type EarningsSummary } from "../domain/earnings.js";
 import { getSchedulerState } from "../domain/schedulerState.js";
+import { getWorkerProcessStatus } from "../agent/workerProcess.js";
 import { listResearchSessions } from "../domain/researchSessions.js";
 import { listCandidates, compareCandidates, type ScoredCandidate } from "../domain/programCandidates.js";
 import * as safari from "../safari/controller.js";
@@ -21,6 +22,9 @@ export interface AgentStatusSummary {
   pendingApprovals: number;
   browserAvailable: boolean;
   lastResearchGoal: string | null;
+  /** Whether a real worker process is actually alive — the scheduler flag alone does not imply this. See src/agent/workerProcess.ts. */
+  workerProcessRunning: boolean;
+  workerProcessPid: number | null;
 }
 
 export async function getAgentStatus(): Promise<AgentStatusSummary> {
@@ -33,6 +37,7 @@ export async function getAgentStatus(): Promise<AgentStatusSummary> {
     browserAvailable = false;
   }
   const lastResearch = listResearchSessions()[0];
+  const worker = getWorkerProcessStatus();
   return {
     schedulerStatus: scheduler.status,
     currentTaskId: scheduler.currentTaskId,
@@ -40,6 +45,8 @@ export async function getAgentStatus(): Promise<AgentStatusSummary> {
     pendingApprovals: listApprovals("pending").length,
     browserAvailable,
     lastResearchGoal: lastResearch?.goal ?? null,
+    workerProcessRunning: worker.running,
+    workerProcessPid: worker.pid,
   };
 }
 

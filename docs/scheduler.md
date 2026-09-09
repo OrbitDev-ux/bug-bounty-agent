@@ -88,6 +88,37 @@ loop stopped itself exactly at the configured limit — not before, not after.
 housekeeping, unsupported-type blocking, pause/resume/stop) without
 depending on this live path.
 
+## v0.3.2: Worker process vs. scheduler flag (fixes a real incident)
+
+`scheduler_state.status` (stopped/running/paused) and an actual worker
+*process* consuming the queue are two different things. `runWorkerLoop()`
+checks the flag between tasks — but only if a loop is actually alive to
+check it. With no launchd daemon installed and no `bba agent start` running
+in a terminal, pressing **/resume** in Telegram only flipped the DB flag;
+no task ever actually ran, because nothing was there to notice the flag
+changed. This was caught live: a user pressed resume/asked the chat to
+"start" repeatedly and nothing happened, because `resumeScheduler()` also
+only succeeds from `'paused'` — the scheduler's actual state most of the
+time is `'stopped'` (its default, until something has run at least once),
+so the call was silently throwing on top of doing nothing.
+
+Fixed in `src/agent/workerProcess.ts` (`startBoundedWorkerRun()` /
+`getWorkerProcessStatus()`, PID-tracked, not launchd-based) plus
+`executeCapability("CONTROL_AGENT_RESUME" | "CONTROL_AGENT_START")` in
+`src/agent/capabilities.ts`: resuming now starts a real, bounded
+`bba agent start` process (default limits — same as running it by hand)
+whenever none is already alive, and a `resumeScheduler()` failure (e.g.
+"not paused") no longer blocks that — the spawned process's own
+`startScheduler()` call sets the flag correctly regardless. `/status` and
+`bba agent status` now show a `Worker process: RUNNING (pid N)` /
+`NOT RUNNING` line, so the flag and reality can never silently diverge in
+what's displayed.
+
+Verified live: with the scheduler in its real default `stopped` state and
+no process running, invoking the exact capability Telegram's `/resume` uses
+spawned a real worker process (confirmed by PID), which ran to completion
+against the actual (empty) queue and exited cleanly.
+
 ## Not implemented in v0.2
 
 - No OS-level daemonization (`launchd`/systemd unit, background detach) —

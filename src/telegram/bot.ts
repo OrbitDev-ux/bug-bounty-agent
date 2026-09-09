@@ -23,6 +23,7 @@ import { getSchedulerState } from "../domain/schedulerState.js";
 import { listResearchSessions } from "../domain/researchSessions.js";
 import { listCandidates, getCandidate, compareCandidates, selectCandidate, cancelCandidate, toggleChecklistItem, confirmAuthorization } from "../domain/programCandidates.js";
 import { discoverAndCreateCandidates } from "../services/programResearch.js";
+import { getWorkerProcessStatus } from "../agent/workerProcess.js";
 import { buildDailySummary, formatDailySummaryMessage, buildWeeklySummary, formatWeeklySummaryMessage } from "./dailySummary.js";
 import { handleChatText, switchToFreechat, switchToAgentChat, confirmControlAction } from "./chatHandler.js";
 import {
@@ -86,7 +87,9 @@ const HELP_TEXT = [
   "/analytics — funnel, conversion rates, top program/category",
   "/goals — revenue goal progress",
   "/settings — view/change safe operator settings",
-  "/pause, /resume — control the scheduler",
+  "/pause — stop the scheduler flag (a running worker process finishes its current task, then idles)",
+  "/resume — un-pause AND actually start a worker process if none is running",
+  "/run — start a bounded worker process right now (same real action as /resume, without implying anything was paused)",
   "/quiet [minutes], /unquiet — mute non-critical alerts",
   "/chat — AI chat grounded in live agent state (allowlisted users only)",
   "/freechat, /exit — general AI conversation, no agent data or actions",
@@ -211,6 +214,11 @@ function wireHandlers(b: Bot): void {
   b.command("resume", async (ctx) => {
     if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
     await ctx.reply(await confirmControlAction("CONTROL_AGENT_RESUME"));
+  });
+
+  b.command("run", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    await ctx.reply(await confirmControlAction("CONTROL_AGENT_START"));
   });
 
   b.command("quiet", async (ctx) => {
@@ -346,7 +354,7 @@ function wireHandlers(b: Bot): void {
     }
 
     // Control-action confirmations (from /chat's natural-language pause/resume flow — section 9).
-    const controlMatch = data.match(/^control:(CONTROL_AGENT_PAUSE|CONTROL_AGENT_RESUME):confirm$/);
+    const controlMatch = data.match(/^control:(CONTROL_AGENT_PAUSE|CONTROL_AGENT_RESUME|CONTROL_AGENT_START):confirm$/);
     if (controlMatch) {
       if (!requireAllowlisted(ctx.from.id)) {
         await ctx.answerCallbackQuery({ text: "Not authorized." });
@@ -536,6 +544,7 @@ async function renderStatus(): Promise<string> {
   const queueDepth = listTasks("queued").length;
   const pendingApprovals = listApprovals("pending").length;
   const lastResearch = listResearchSessions()[0];
+  const worker = getWorkerProcessStatus();
 
   let browserStatus = "UNKNOWN";
   try {
@@ -545,8 +554,15 @@ async function renderStatus(): Promise<string> {
     browserStatus = "UNAVAILABLE";
   }
 
+  const workerLine = worker.running
+    ? `Worker Process: RUNNING (pid ${worker.pid})`
+    : scheduler.status === "running"
+      ? "Worker Process: NOT RUNNING ⚠️ (scheduler flag says running, but nothing is actually consuming the queue — use /run or /resume to actually start one)"
+      : "Worker Process: not running";
+
   return [
     `Agent: ${scheduler.status.toUpperCase()}`,
+    workerLine,
     `Current Task: ${scheduler.currentTaskId ? `#${scheduler.currentTaskId}` : "none"}`,
     `Queue: ${queueDepth}`,
     `Pending Approvals: ${pendingApprovals}`,

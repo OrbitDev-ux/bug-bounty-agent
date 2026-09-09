@@ -272,7 +272,7 @@ function checkOrCross(v: boolean): string {
 export function formatCandidatesList(candidates: ProgramCandidate[]): string {
   const lines = ["🔎 PROGRAM CANDIDATES", "", `Candidates:\n${candidates.length}`, ""];
   if (candidates.length === 0) {
-    lines.push("None yet. Discover some first (CLI `bba program discover \"<topic>\"`, or ask in /chat).");
+    lines.push('None yet. Try /discover "<topic>" first.');
     return lines.join("\n");
   }
   for (const c of candidates) {
@@ -372,13 +372,46 @@ export function formatCandidateComparison(ranked: ScoredCandidate[]): string {
   return lines.join("\n").trimEnd();
 }
 
-export function candidateRecommendationKeyboard(candidateId: string): InlineKeyboard {
+/**
+ * Stage-aware action keyboard for /candidate and candidate:details — every
+ * action reachable at that stage is one tap away, so nothing about this
+ * pipeline requires falling back to the CLI. The one deliberate exception:
+ * activating a candidate into a real, live-testable program still requires
+ * a Confirm tap (candidate:activate-confirm), matching the same
+ * confirm-before-executing pattern used for CONTROL_AGENT_PAUSE/RESUME —
+ * this is the single highest-consequence action in the whole feature.
+ */
+export function candidateActionKeyboard(candidate: ProgramCandidate): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  switch (candidate.stage) {
+    case "discovered":
+    case "researched":
+      kb.text("🔬 Research", `candidate:research:${candidate.id}`).text("❌ Cancel", `candidate:cancel:${candidate.id}`);
+      break;
+    case "candidate":
+      kb.text("📄 Details", `candidate:details:${candidate.id}`)
+        .text("📊 Compare", "candidate:compare")
+        .row()
+        .text("✅ Select", `candidate:select:${candidate.id}`)
+        .text("❌ Cancel", `candidate:cancel:${candidate.id}`);
+      break;
+    case "enrollment_pending":
+      kb.text("📋 View Checklist", `candidate:viewchecklist:${candidate.id}`).text("❌ Cancel", `candidate:cancel:${candidate.id}`);
+      break;
+    case "authorized":
+      kb.text("🚀 Activate for Live Research", `candidate:activate:${candidate.id}`).row().text("❌ Cancel", `candidate:cancel:${candidate.id}`);
+      break;
+    case "ready_for_research":
+      kb.text(`✅ Live: ${candidate.linkedProgramId?.slice(0, 8) ?? "linked program"}`, "noop");
+      break;
+  }
+  return kb;
+}
+
+export function candidateActivateConfirmKeyboard(candidateId: string): InlineKeyboard {
   return new InlineKeyboard()
-    .text("📄 Details", `candidate:details:${candidateId}`)
-    .text("📊 Compare", "candidate:compare")
-    .row()
-    .text("✅ Select", `candidate:select:${candidateId}`)
-    .text("❌ Cancel", `candidate:cancel:${candidateId}`);
+    .text("✅ Confirm Activate", `candidate:activate-confirm:${candidateId}`)
+    .text("❌ Cancel", `candidate:activate-cancel:${candidateId}`);
 }
 
 export function formatEnrollmentChecklist(candidate: ProgramCandidate): string {

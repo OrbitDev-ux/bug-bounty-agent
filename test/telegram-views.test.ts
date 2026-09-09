@@ -23,8 +23,9 @@ import {
   formatCandidateComparison,
   formatEnrollmentChecklist,
   formatEnrollmentStatus,
+  candidateActionKeyboard,
 } from "../src/telegram/views.js";
-import { createCandidate, recordResearch, selectCandidate, compareCandidates, getCandidate } from "../src/domain/programCandidates.js";
+import { createCandidate, recordResearch, selectCandidate, compareCandidates, getCandidate, confirmAuthorization } from "../src/domain/programCandidates.js";
 import { getEnrollmentStatus } from "../src/services/dashboard.js";
 import { createTask } from "../src/domain/tasks.js";
 import { listFindings } from "../src/domain/findings.js";
@@ -244,6 +245,38 @@ test("formatEnrollmentChecklist lists every item unchecked initially and never c
   assert.match(text, /\[ \] Create platform account/);
   assert.match(text, /HUMAN ACTION REQUIRED/);
   assert.match(text, /not independently verified/);
+});
+
+function callbackData(kb: ReturnType<typeof candidateActionKeyboard>): string[] {
+  return kb.inline_keyboard.flat().map((b) => ("callback_data" in b ? b.callback_data! : ""));
+}
+
+test("candidateActionKeyboard offers exactly the actions reachable at each stage — never Select before research, never a bare-tap Activate", () => {
+  const c = createCandidate({ name: "Example VDP", platform: "self-hosted", officialUrl: "https://example.com/security" });
+
+  // discovered: only Research/Cancel — no Select, since nothing is known yet.
+  let data = callbackData(candidateActionKeyboard(c));
+  assert.ok(data.some((d) => d.startsWith("candidate:research:")));
+  assert.ok(!data.some((d) => d.startsWith("candidate:select:")));
+
+  // candidate: Select becomes available once researched.
+  const researched = recordResearch(c.id, { scopeClarity: "HIGH" });
+  data = callbackData(candidateActionKeyboard(researched));
+  assert.ok(data.some((d) => d.startsWith("candidate:select:")));
+  assert.ok(!data.some((d) => d.startsWith("candidate:activate:")));
+
+  // enrollment_pending: checklist, not Select again.
+  const selected = selectCandidate(c.id, "op");
+  data = callbackData(candidateActionKeyboard(selected));
+  assert.ok(data.some((d) => d.startsWith("candidate:viewchecklist:")));
+  assert.ok(!data.some((d) => d.startsWith("candidate:select:")));
+
+  // authorized: Activate is offered, but only as a confirm-prompt trigger —
+  // never the actual activating callback (candidate:activate-confirm:) directly.
+  const authorized = confirmAuthorization(c.id, "op");
+  data = callbackData(candidateActionKeyboard(authorized));
+  assert.ok(data.includes(`candidate:activate:${c.id}`));
+  assert.ok(!data.some((d) => d.startsWith("candidate:activate-confirm:")));
 });
 
 test("formatEnrollmentStatus mirrors the section-21 PENDING/NOT CONFIRMED/BLOCKED shape before enrollment", () => {

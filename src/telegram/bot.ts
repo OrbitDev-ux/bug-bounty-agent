@@ -22,7 +22,8 @@ import { getSettings, updateSettings, setQuietUntil } from "../domain/settings.j
 import { getSchedulerState } from "../domain/schedulerState.js";
 import { listResearchSessions } from "../domain/researchSessions.js";
 import { listCandidates, getCandidate, compareCandidates, selectCandidate, cancelCandidate, toggleChecklistItem, confirmAuthorization } from "../domain/programCandidates.js";
-import { discoverAndCreateCandidates } from "../services/programResearch.js";
+import { discoverAndCreateCandidates, researchCandidate, activateCandidateForResearch } from "../services/programResearch.js";
+import { runResearchTask } from "../agent/orchestrator.js";
 import { getWorkerProcessStatus } from "../agent/workerProcess.js";
 import { buildDailySummary, formatDailySummaryMessage, buildWeeklySummary, formatWeeklySummaryMessage } from "./dailySummary.js";
 import { handleChatText, switchToFreechat, switchToAgentChat, confirmControlAction } from "./chatHandler.js";
@@ -43,9 +44,11 @@ import {
   formatCandidatesList,
   formatCandidateDetail,
   formatCandidateComparison,
+  formatCandidateRecommendation,
   formatEnrollmentChecklist,
   enrollmentChecklistKeyboard,
-  candidateRecommendationKeyboard,
+  candidateActionKeyboard,
+  candidateActivateConfirmKeyboard,
   EARNINGS_PERIODS,
   type EarningsPeriod,
   type FindingFilter,
@@ -82,7 +85,12 @@ const HELP_TEXT = [
   "/programs — tracked (live, enrolled) programs",
   "/discover <topic> — search for public bug bounty programs (no live testing until you enroll)",
   "/candidates — programs found so far, with enrollment stage",
-  "/candidate <id> — one candidate's researched detail + Select/Compare/Cancel",
+  "/candidate <id> — one candidate's detail + stage-appropriate actions",
+  "/research <id> — deep-dive research a candidate (scope/policy/automation/reward)",
+  "/compare — rank all candidates by decision-support score",
+  "/recommend — top recommendation + alternatives, with action buttons",
+  "/activate <id> — re-verify policy and go live (only once 'authorized'; asks to confirm)",
+  "/liveresearch <program-id-or-name> <goal> — real Research Agent run against an already-live, enrolled program",
   "/earnings [today|week|month|lastmonth|90d|all] — revenue",
   "/analytics — funnel, conversion rates, top program/category",
   "/goals — revenue goal progress",
@@ -179,9 +187,63 @@ function wireHandlers(b: Bot): void {
   b.command("candidate", async (ctx) => {
     if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
     const ref = ctx.match?.toString().trim();
-    const candidate = ref ? listCandidates({ includeCancelled: true }).find((c) => c.id === ref || c.id.startsWith(ref)) : undefined;
+    const candidate = findCandidateRef(ref);
     if (!candidate) return void ctx.reply("Usage: /candidate <id-or-prefix> — see /candidates for the list.");
-    await ctx.reply(formatCandidateDetail(candidate), { reply_markup: candidateRecommendationKeyboard(candidate.id) });
+    if (candidate.stage === "enrollment_pending") {
+      await ctx.reply(formatEnrollmentChecklist(candidate), { reply_markup: enrollmentChecklistKeyboard(candidate) });
+      return;
+    }
+    await ctx.reply(formatCandidateDetail(candidate), { reply_markup: candidateActionKeyboard(candidate) });
+  });
+
+  b.command("research", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    const ref = ctx.match?.toString().trim();
+    const candidate = findCandidateRef(ref);
+    if (!candidate) return void ctx.reply("Usage: /research <candidate-id-or-prefix> — see /candidates for the list.");
+    await runCandidateResearch(ctx, candidate.id);
+  });
+
+  b.command("compare", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    await ctx.reply(formatCandidateComparison(compareCandidates(listCandidates())));
+  });
+
+  b.command("recommend", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    const ranked = compareCandidates(listCandidates());
+    await ctx.reply(
+      formatCandidateRecommendation(ranked.length, ranked),
+      ranked.length > 0 ? { reply_markup: candidateActionKeyboard(ranked[0]!.candidate) } : undefined,
+    );
+  });
+
+  b.command("activate", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    const ref = ctx.match?.toString().trim();
+    const candidate = findCandidateRef(ref);
+    if (!candidate) return void ctx.reply("Usage: /activate <candidate-id-or-prefix> — see /candidates for the list.");
+    if (candidate.stage !== "authorized") return void ctx.reply(`${candidate.name} is '${candidate.stage}', not 'authorized' — nothing to activate yet.`);
+    await ctx.reply(
+      `⚠️ This re-verifies ${candidate.name}'s published policy right now and creates a REAL, live-testable program. Confirm?`,
+      { reply_markup: candidateActivateConfirmKeyboard(candidate.id) },
+    );
+  });
+
+  b.command("liveresearch", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    const raw = ctx.match?.toString().trim() ?? "";
+    const spaceIdx = raw.indexOf(" ");
+    const programRef = spaceIdx === -1 ? raw : raw.slice(0, spaceIdx);
+    const goal = spaceIdx === -1 ? "" : raw.slice(spaceIdx + 1).trim();
+    if (!programRef || !goal) return void ctx.reply('Usage: /liveresearch <program-id-or-name> <goal> — see /programs for enrolled, live programs. This runs real Research Agent work against a live program.');
+    const program = listPrograms().find((p) => p.id === programRef || p.id.startsWith(programRef) || p.name.toLowerCase() === programRef.toLowerCase());
+    if (!program) return void ctx.reply("Program not found — see /programs. (Not enrolled anywhere yet? Use /discover first.)");
+    await ctx.reply(`Researching ${program.name}: "${goal}"... this reads real public pages and can take a few minutes.`);
+    const result = await runResearchTask({ programId: program.id, goal });
+    await ctx.reply(
+      `Task ${result.task.id.slice(0, 8)} -> ${result.task.status}\nCandidate findings: ${result.findingsCreated.length}${result.findingsCreated.length > 0 ? " (see /findings)" : ""}\nCost: $${result.costUsd.toFixed(4)}${!result.ok ? `\nError: ${result.error}` : ""}`,
+    );
   });
 
   b.command("earnings", async (ctx) => {
@@ -295,7 +357,46 @@ function wireHandlers(b: Bot): void {
         const candidate = getCandidate(parts[2]!);
         await ctx.answerCallbackQuery();
         if (!candidate) return void ctx.reply("Candidate not found.");
-        await ctx.reply(formatCandidateDetail(candidate), { reply_markup: candidateRecommendationKeyboard(candidate.id) });
+        await ctx.reply(formatCandidateDetail(candidate), { reply_markup: candidateActionKeyboard(candidate) });
+        return;
+      }
+      if (kind === "viewchecklist") {
+        const candidate = getCandidate(parts[2]!);
+        await ctx.answerCallbackQuery();
+        if (!candidate) return void ctx.reply("Candidate not found.");
+        await ctx.reply(formatEnrollmentChecklist(candidate), { reply_markup: enrollmentChecklistKeyboard(candidate) });
+        return;
+      }
+      if (kind === "research") {
+        await ctx.answerCallbackQuery({ text: "Researching — this reads the real public page and can take a minute or two." });
+        await runCandidateResearch(ctx, parts[2]!);
+        return;
+      }
+      if (kind === "activate") {
+        const candidate = getCandidate(parts[2]!);
+        await ctx.answerCallbackQuery();
+        if (!candidate) return void ctx.reply("Candidate not found.");
+        if (candidate.stage !== "authorized") return void ctx.reply(`${candidate.name} is '${candidate.stage}', not 'authorized' — nothing to activate yet.`);
+        await ctx.reply(
+          `⚠️ This re-verifies ${candidate.name}'s published policy right now and creates a REAL, live-testable program. Confirm?`,
+          { reply_markup: candidateActivateConfirmKeyboard(candidate.id) },
+        );
+        return;
+      }
+      if (kind === "activate-cancel") {
+        await ctx.answerCallbackQuery({ text: "Cancelled — nothing activated." });
+        return;
+      }
+      if (kind === "activate-confirm") {
+        await ctx.answerCallbackQuery({ text: "Activating — re-verifying the published policy now, this can take a minute or two." });
+        const result = await activateCandidateForResearch(parts[2]!);
+        if (!result.ok || !result.result) {
+          await ctx.reply(`Activation failed: ${result.error ?? "unknown error"}`);
+          return;
+        }
+        await ctx.reply(
+          `🚀 LIVE: ${result.result.candidate.name}\n\nProgram: ${result.result.program.id} (status=${result.result.program.status})\nLive testing is now unblocked for this program. Cost: $${result.costUsd.toFixed(4)}`,
+        );
         return;
       }
       if (kind === "select") {
@@ -330,7 +431,8 @@ function wireHandlers(b: Bot): void {
           const updated = confirmAuthorization(parts[2]!, telegramUserId);
           await ctx.answerCallbackQuery({ text: "Recorded as self-reported enrollment. Not independently verified." });
           await ctx.reply(
-            `✅ ${updated.name} marked AUTHORIZED (self-reported by you, not independently verified).\n\nLive research is still BLOCKED until the final activation step, which re-verifies the published policy and is done from the CLI: \`bba program activate-candidate ${updated.id}\`.`,
+            `✅ ${updated.name} marked AUTHORIZED (self-reported by you, not independently verified).\n\nLive research is still BLOCKED until you tap Activate (re-verifies the published policy right now) — use /candidate ${updated.id.slice(0, 8)} or /activate ${updated.id.slice(0, 8)}.`,
+            { reply_markup: candidateActionKeyboard(updated) },
           );
         } catch (err) {
           await ctx.answerCallbackQuery({ text: (err as Error).message, show_alert: true });
@@ -447,7 +549,7 @@ async function handleMenuSelection(ctx: any, item: string): Promise<void> {
       return;
     case "research":
       await ctx.reply(
-        'Not enrolled in a real program yet? Use /discover "<topic>" to find public candidates, then /candidates to review them.\n\nAlready have a program? Kick off research from the CLI (`bba program research <id> "<goal>"`) or ask in /chat.',
+        'Not enrolled in a real program yet? Use /discover "<topic>" to find public candidates, then /candidates to review them.\n\nAlready have a live program? /liveresearch <program-id-or-name> <goal> runs real Research Agent work against it.',
       );
       return;
     case "approvals": {
@@ -494,6 +596,24 @@ async function editFindingsPage(ctx: any, filter: FindingFilter, page: number): 
   const { text, totalPages } = formatFindingsList(listFindings(), filter, page);
   if (!ctx.callbackQuery.message) return;
   await ctx.editMessageText(text, { reply_markup: totalPages > 1 ? findingsPaginationKeyboard(filter, page, totalPages) : findingsFilterKeyboard(filter) });
+}
+
+function findCandidateRef(ref: string | undefined) {
+  if (!ref) return undefined;
+  return listCandidates({ includeCancelled: true }).find((c) => c.id === ref || c.id.startsWith(ref));
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function runCandidateResearch(ctx: any, candidateId: string): Promise<void> {
+  const result = await researchCandidate(candidateId);
+  if (!result.ok || !result.candidate) {
+    await ctx.reply(`Research failed: ${result.error ?? "unknown error"}`);
+    return;
+  }
+  await ctx.reply(
+    `🔬 ${result.candidate.name} researched -> stage=${result.candidate.stage}\nScope: ${result.candidate.scopeClarity}  Policy: ${result.candidate.policyClarity}  Automation: ${result.candidate.automationPolicy}\nCost: $${result.costUsd.toFixed(4)}`,
+    { reply_markup: candidateActionKeyboard(result.candidate) },
+  );
 }
 
 function renderSettings(): string {

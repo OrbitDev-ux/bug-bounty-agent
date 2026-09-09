@@ -92,16 +92,35 @@ Telegram/CLI rendering of the score. `compareCandidates()` /
 
 ## Telegram
 
-- `/discover "<topic>"` — triggers real discovery from chat.
-- `/candidates` — every non-cancelled candidate with its stage.
-- `/candidate <id>` — full detail (`[📄 Details] [📊 Compare] [✅ Select] [❌ Cancel]`).
-- After `[✅ Select]`: the enrollment checklist, with per-item toggle buttons
-  and `[✅ I have enrolled]`.
-- **No Telegram button reaches `activateForResearch()`.** The final,
-  live-target-unlocking step is deliberately CLI-only — it's the single
-  highest-consequence action in this feature (it can flip a real program to
-  `status: active`, which lets `evaluateScope()` return `ALLOW`), so it gets
-  one more deliberate step of friction than a chat tap.
+Every step is reachable from Telegram — nothing in this pipeline requires
+the CLI. `/candidate <id>` (and the `candidate:details` callback) render a
+**stage-aware** action keyboard (`candidateActionKeyboard()` in
+`src/telegram/views.ts`) that only ever offers the action actually legal at
+that candidate's current stage:
+
+| Stage | Buttons offered |
+|---|---|
+| `discovered` / `researched` | `[🔬 Research] [❌ Cancel]` |
+| `candidate` | `[📄 Details] [📊 Compare]` / `[✅ Select] [❌ Cancel]` |
+| `enrollment_pending` | `[📋 View Checklist] [❌ Cancel]` → per-item toggles + `[✅ I have enrolled]` |
+| `authorized` | `[🚀 Activate for Live Research] [❌ Cancel]` |
+| `ready_for_research` | `[✅ Live: <program id>]` (informational only) |
+
+Commands: `/discover "<topic>"`, `/candidates`, `/candidate <id>`,
+`/research <id>` (deep-dive), `/compare`, `/recommend`, `/activate <id>`.
+`/liveresearch <program-id-or-name> <goal>` runs a real Research Agent
+session against an already-live, enrolled program (`runResearchTask()` from
+`src/agent/orchestrator.ts`) — the step after a candidate is fully
+activated.
+
+**Activation still requires an explicit Confirm tap.** Tapping
+`[🚀 Activate for Live Research]` (or `/activate <id>`) shows a
+`⚠️ ... Confirm?` prompt with `[✅ Confirm Activate] [❌ Cancel]` before
+`activateForResearch()` ever runs — it's the single highest-consequence
+action in this feature (it can flip a real program to `status: active`,
+which lets `evaluateScope()` return `ALLOW`), so it gets the same
+confirm-before-executing treatment as `CONTROL_AGENT_PAUSE`/`RESUME`, never
+a bare one-tap button.
 
 `src/services/dashboard.ts` exposes `getProgramCandidates()`,
 `getProgramComparison()`, `getEnrollmentStatus()`, `getSelectedProgram()` —
@@ -122,7 +141,19 @@ page for this would read identical data, not a second implementation.
   actually creates the linked live program. See `test/programCandidates.test.ts`,
   the candidate additions to `test/dashboard-services.test.ts` and
   `test/telegram-views.test.ts`.
-- **Not yet verified in this session:** a live `bba program discover`/
-  `research-candidate` run against real public program pages (needs a live
-  Safari session), and a live Telegram round-trip tapping the actual
-  `[✅ Select]` / `[✅ I have enrolled]` buttons.
+- **Verified live (real Safari + Claude calls, real public pages):**
+  `bba program discover` found real candidates (Microsoft Bug Bounty
+  Program, GitHub Bug Bounty via HackerOne) from a real search;
+  `bba program research-candidate` deep-researched both — GitHub came back
+  scope/policy HIGH clarity, automation `allowed`; Microsoft came back
+  scope/policy HIGH clarity, automation `needs_review` (its page doesn't
+  explicitly address automated tooling, so it correctly did NOT default to
+  `allowed`).
+- **Not yet verified in this session:** a live Telegram round-trip actually
+  tapping the buttons (`[🔬 Research]`, `[✅ Select]`, `[✅ I have enrolled]`,
+  `[🚀 Activate for Live Research]` + its confirm prompt) — the command/
+  callback wiring is code-complete and unit-tested (see
+  `candidateActionKeyboard`'s stage test in `test/telegram-views.test.ts`)
+  but a human hasn't tapped through it in a real chat yet. `/liveresearch`
+  is similarly code-complete but unexercised live — no program has reached
+  `ready_for_research` yet to test it against.

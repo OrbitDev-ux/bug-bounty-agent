@@ -28,6 +28,12 @@ export function runMigrations(db: DatabaseSync): void {
 
   addColumnIfMissing(db, "tasks", "retry_count", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "tasks", "timeout_at", "TEXT");
+
+  addColumnIfMissing(db, "earnings", "verification_source", "TEXT");
+  addColumnIfMissing(db, "earnings", "verification_status", "TEXT NOT NULL DEFAULT 'UNVERIFIED'");
+  addColumnIfMissing(db, "earnings", "exchange_rate", "REAL");
+  addColumnIfMissing(db, "earnings", "rate_source", "TEXT");
+  addColumnIfMissing(db, "earnings", "rate_timestamp", "TEXT");
 }
 
 function addColumnIfMissing(db: DatabaseSync, table: string, column: string, type: string): void {

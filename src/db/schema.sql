@@ -146,18 +146,99 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 
 CREATE TABLE IF NOT EXISTS earnings (
-  id           TEXT PRIMARY KEY,
-  finding_id   TEXT NOT NULL REFERENCES findings(id),
-  program_id   TEXT NOT NULL REFERENCES programs(id),
-  bounty_status TEXT NOT NULL DEFAULT 'not_applicable',
-  amount       REAL,
-  currency     TEXT,
-  awarded_at   TEXT,
-  paid_at      TEXT,
-  created_at   TEXT NOT NULL,
-  updated_at   TEXT NOT NULL
+  id                TEXT PRIMARY KEY,
+  finding_id        TEXT NOT NULL REFERENCES findings(id),
+  program_id        TEXT NOT NULL REFERENCES programs(id),
+  bounty_status     TEXT NOT NULL DEFAULT 'not_applicable',
+  amount            REAL,
+  currency          TEXT,
+  awarded_at        TEXT,
+  paid_at           TEXT,
+  -- v0.3: bounty verification (section 24-25) — NULL verification_source means
+  -- UNVERIFIED regardless of bounty_status; nothing here auto-promotes to "verified paid".
+  verification_source TEXT,
+  verification_status TEXT NOT NULL DEFAULT 'UNVERIFIED', -- UNVERIFIED | VERIFIED
+  -- v0.3: currency handling (section 23) — original amount/currency above is
+  -- always preserved; a conversion is only ever shown if these are all set.
+  exchange_rate     REAL,
+  rate_source       TEXT,
+  rate_timestamp    TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_earnings_paid_at ON earnings(paid_at);
+
+-- v0.3: real, measured operating costs (never estimated) — see src/services/costs.ts,
+-- which records the actual costUsd every runClaude() call reports.
+CREATE TABLE IF NOT EXISTS costs (
+  id          TEXT PRIMARY KEY,
+  category    TEXT NOT NULL, -- claude_api | infrastructure | hosting | other
+  amount      REAL NOT NULL,
+  currency    TEXT NOT NULL DEFAULT 'USD',
+  note        TEXT NOT NULL DEFAULT '',
+  incurred_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_costs_incurred_at ON costs(incurred_at);
+CREATE INDEX IF NOT EXISTS idx_costs_category ON costs(category);
+
+-- v0.3: revenue goals (section 21). Progress is computed from PAID earnings
+-- only, in the goal's own currency (no fabricated FX conversion — section 23).
+CREATE TABLE IF NOT EXISTS goals (
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  target_amount  REAL NOT NULL,
+  target_currency TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  archived_at    TEXT
+);
+
+-- v0.3: revenue change audit (section 39) — separate from earnings.updated_at
+-- because that alone doesn't capture who changed it or the previous value.
+CREATE TABLE IF NOT EXISTS revenue_audit (
+  id            TEXT PRIMARY KEY,
+  earning_id    TEXT NOT NULL REFERENCES earnings(id),
+  who           TEXT NOT NULL, -- telegram user id, or 'cli-local-operator'
+  what          TEXT NOT NULL, -- e.g. "marked awarded", "marked paid"
+  source        TEXT NOT NULL, -- 'telegram' | 'web_dashboard' | 'cli'
+  previous_value TEXT,         -- JSON snapshot
+  new_value     TEXT,          -- JSON snapshot
+  reason        TEXT NOT NULL DEFAULT '',
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_revenue_audit_earning ON revenue_audit(earning_id);
+
+-- v0.3: Telegram AI chat mode + short conversation history (sections 32-35).
+-- Not per-topic, one row per Telegram user — mode governs how plain-text
+-- messages (non-slash-command) are routed.
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  telegram_user_id TEXT PRIMARY KEY,
+  mode             TEXT NOT NULL DEFAULT 'AGENT_CHAT', -- FREECHAT | AGENT_CHAT
+  updated_at       TEXT NOT NULL
+);
+
+-- Bounded ring buffer per user (see src/telegram/chatMemory.ts for the prune
+-- policy) — never stores secrets, never grows unbounded (section 35).
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  telegram_user_id TEXT NOT NULL,
+  role             TEXT NOT NULL, -- user | assistant
+  content          TEXT NOT NULL,
+  created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(telegram_user_id, created_at);
+
+-- v0.3: global operator settings (section 12). Singleton row, id='singleton'.
+-- Deliberately has NO field to disable scope checks, approval gates, or
+-- policy enforcement — those are not configurable, by design.
+CREATE TABLE IF NOT EXISTS agent_settings (
+  id                    TEXT PRIMARY KEY DEFAULT 'singleton',
+  ai_model              TEXT NOT NULL DEFAULT 'sonnet',
+  notification_level    TEXT NOT NULL DEFAULT 'important', -- all | important | none
+  daily_summary_enabled INTEGER NOT NULL DEFAULT 1,
+  agent_auto_start      INTEGER NOT NULL DEFAULT 0,
+  research_enabled      INTEGER NOT NULL DEFAULT 1,
+  updated_at            TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS agent_runs (
   id          TEXT PRIMARY KEY,

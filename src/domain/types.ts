@@ -158,6 +158,9 @@ export interface Report {
   updatedAt: string;
 }
 
+/** UNVERIFIED unless an explicit verificationSource was recorded — never inferred from bountyStatus alone. */
+export type VerificationStatus = "UNVERIFIED" | "VERIFIED";
+
 export interface Earning {
   id: string;
   findingId: string;
@@ -167,8 +170,47 @@ export interface Earning {
   currency: string | null;
   awardedAt: string | null;
   paidAt: string | null;
+  /** Set only when something outside this agent (a human checking the platform, etc.) confirmed the bounty. Null = UNVERIFIED. */
+  verificationSource: string | null;
+  verificationStatus: VerificationStatus;
+  /** Optional currency conversion metadata (section 23) — a converted amount is only ever shown when all three are present. */
+  exchangeRate: number | null;
+  rateSource: string | null;
+  rateTimestamp: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type CostCategory = "claude_api" | "infrastructure" | "hosting" | "other";
+
+export interface Cost {
+  id: string;
+  category: CostCategory;
+  amount: number;
+  currency: string;
+  note: string;
+  incurredAt: string;
+}
+
+export interface Goal {
+  id: string;
+  name: string;
+  targetAmount: number;
+  targetCurrency: string;
+  createdAt: string;
+  archivedAt: string | null;
+}
+
+export interface RevenueAuditEntry {
+  id: string;
+  earningId: string;
+  who: string;
+  what: string;
+  source: "telegram" | "web_dashboard" | "cli";
+  previousValue: string | null;
+  newValue: string | null;
+  reason: string;
+  createdAt: string;
 }
 
 export type AgentRunKind = "manual" | "scheduled";
@@ -254,4 +296,73 @@ export interface SchedulerState extends SchedulerRunLimits {
   browserOpsThisRun: number;
   startedAt: string | null;
   updatedAt: string;
+}
+
+// --- v0.3: Telegram AI Chat ---
+
+/** Free Chat != Agent Control (section 7): FREECHAT never sees agent context or tools. */
+export type ChatMode = "FREECHAT" | "AGENT_CHAT";
+
+export interface ChatSession {
+  telegramUserId: string;
+  mode: ChatMode;
+  updatedAt: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  telegramUserId: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+// --- v0.3: Command Router ---
+
+export type IntentCategory = "CHAT" | "READ_ONLY_QUERY" | "CONTROL_ACTION" | "APPROVAL_ACTION" | "UNSAFE_ACTION" | "UNKNOWN";
+
+/** Fixed, enumerable capabilities the router may invoke — never freeform code execution (section 11). */
+export type Capability =
+  | "READ_STATUS"
+  | "READ_TASKS"
+  | "READ_FINDINGS"
+  | "READ_EARNINGS"
+  | "READ_APPROVALS"
+  | "READ_PROGRAMS"
+  | "CONTROL_AGENT_PAUSE"
+  | "CONTROL_AGENT_RESUME"
+  | "DECIDE_APPROVAL";
+
+// --- v0.3: Settings ---
+
+export type NotificationLevel = "all" | "important" | "none";
+
+/**
+ * Global operator settings (section 12). Deliberately has NO field for
+ * disabling scope checks, approvals, or policy enforcement — not a missing
+ * feature, an intentional omission.
+ */
+export interface AgentSettings {
+  aiModel: string;
+  notificationLevel: NotificationLevel;
+  dailySummaryEnabled: boolean;
+  agentAutoStart: boolean;
+  researchEnabled: boolean;
+  updatedAt: string;
+}
+
+// --- v0.3: Health Monitoring ---
+
+export type HealthStatus = "OK" | "DEGRADED" | "FAILED";
+
+export interface HealthCheckResult {
+  component: string;
+  status: HealthStatus;
+  detail: string;
+}
+
+export interface HealthReport {
+  overall: HealthStatus;
+  checks: HealthCheckResult[];
+  checkedAt: string;
 }

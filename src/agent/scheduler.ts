@@ -15,6 +15,11 @@ import { selectNextTask, runSafetyHousekeeping } from "./planner.js";
 import { executeDiscoveryTask, executeResearchTask } from "./orchestrator.js";
 import { log } from "../logging/logger.js";
 import { startRun, finishRun } from "../domain/agentRuns.js";
+import { checkHealth } from "../services/health.js";
+import { safariUnavailableAlert, taskFailedRepeatedlyAlert } from "./alerts.js";
+
+/** Runaway protection (project brief section 64): this many failures in a row pauses the agent rather than burning through the whole queue failing. */
+const MAX_CONSECUTIVE_FAILURES = 3;
 
 /** Applied when the caller doesn't specify a limit — v0.2 never runs truly unbounded (section 33). */
 const DEFAULT_LIMITS = {
@@ -92,6 +97,20 @@ export async function runWorkerLoop(limitsInput: SchedulerLimitsInput = {}): Pro
 
   let tasksExecuted = 0;
   let stoppedReason = "unknown";
+  let consecutiveFailures = 0;
+
+  // Health gate (section 31): if Safari is unreachable at the start of a run,
+  // pause immediately and alert rather than let every research task fail one
+  // by one — the loop hasn't touched the queue yet, so nothing is lost.
+  const startupHealth = await checkHealth();
+  const safariCheck = startupHealth.checks.find((c) => c.component === "Safari");
+  if (safariCheck?.status === "FAILED") {
+    pauseScheduler();
+    await safariUnavailableAlert(safariCheck.detail);
+    finishRun(agentRun.id, "failed", `Safari unavailable at startup: ${safariCheck.detail}`);
+    log("scheduler_stopped", { runId: agentRun.id, tasksExecuted: 0, stoppedReason: "safari_unavailable" });
+    return { tasksExecuted: 0, stoppedReason: "safari_unavailable" };
+  }
 
   try {
     for (;;) {
@@ -119,19 +138,30 @@ export async function runWorkerLoop(limitsInput: SchedulerLimitsInput = {}): Pro
         break;
       }
 
-      setCurrentTask(decision.nextTask.id);
-      log("task_started", { taskId: decision.nextTask.id, plannerReason: decision.reason, risk: decision.risk });
+      const currentTaskId = decision.nextTask.id;
+      setCurrentTask(currentTaskId);
+      log("task_started", { taskId: currentTaskId, plannerReason: decision.reason, risk: decision.risk });
 
+      let taskOk = false;
       try {
         const outcome = await dispatchTask(decision.nextTask);
-        log("task_completed", { taskId: decision.nextTask.id, ok: outcome.ok, note: outcome.note });
+        taskOk = outcome.ok;
+        log("task_completed", { taskId: currentTaskId, ok: outcome.ok, note: outcome.note });
       } catch (err) {
-        log("task_failed", { taskId: decision.nextTask.id, error: (err as Error).message });
+        log("task_failed", { taskId: currentTaskId, error: (err as Error).message });
       }
 
       incrementTasksRun();
       tasksExecuted++;
       setCurrentTask(null);
+
+      consecutiveFailures = taskOk ? 0 : consecutiveFailures + 1;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        pauseScheduler();
+        await taskFailedRepeatedlyAlert(currentTaskId, consecutiveFailures);
+        stoppedReason = `${consecutiveFailures} consecutive task failures — paused for safety`;
+        break;
+      }
     }
   } finally {
     setCurrentTask(null);

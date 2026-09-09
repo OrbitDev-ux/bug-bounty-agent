@@ -29,7 +29,12 @@ export type LogEvent =
   | "scheduler_started"
   | "scheduler_stopped"
   | "scheduler_paused"
-  | "scheduler_resumed";
+  | "scheduler_resumed"
+  | "agent_alert"
+  | "startup_recovery"
+  | "health_check"
+  | "chat_intent_classified"
+  | "chat_mode_changed";
 
 const SECRET_KEY_PATTERN = /token|secret|key|password|authorization/i;
 

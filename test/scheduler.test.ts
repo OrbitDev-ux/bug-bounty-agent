@@ -4,7 +4,8 @@ import { freshDb } from "./testDb.js";
 import { createProgram } from "../src/domain/programs.js";
 import { createTask, getTask, transitionTask } from "../src/domain/tasks.js";
 import { startScheduler } from "../src/domain/schedulerState.js";
-import { runOnce, recoverStaleTasksNow, pauseAgent, resumeAgent, stopAgent } from "../src/agent/scheduler.js";
+import { runOnce, runWorkerLoop, recoverStaleTasksNow, pauseAgent, resumeAgent, stopAgent } from "../src/agent/scheduler.js";
+import { getSchedulerState } from "../src/domain/schedulerState.js";
 import type { Program } from "../src/domain/types.js";
 
 let program: Program;
@@ -68,4 +69,16 @@ test("pause -> resume round-trips back to running, preserving state", () => {
   assert.equal(paused.status, "paused");
   const resumed = resumeAgent();
   assert.equal(resumed.status, "running");
+});
+
+test("runWorkerLoop auto-pauses after 3 consecutive task failures (runaway protection, section 64) — no network calls, since 'validate' tasks are blocked before any dispatch", async () => {
+  for (let i = 0; i < 5; i++) {
+    createTask({ type: "validate", programId: program.id, target: `x${i}` });
+  }
+
+  const summary = await runWorkerLoop({ maxTasksPerRun: 10 });
+
+  assert.equal(summary.tasksExecuted, 3); // stopped itself after exactly 3 failures, not all 5
+  assert.match(summary.stoppedReason, /consecutive task failures/);
+  assert.equal(getSchedulerState().status, "paused"); // not 'stopped' — pause preserves state (section 34)
 });

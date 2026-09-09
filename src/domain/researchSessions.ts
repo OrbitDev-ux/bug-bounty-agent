@@ -114,6 +114,24 @@ export function listRunningResearchSessions(): ResearchSession[] {
   return listResearchSessions("running");
 }
 
+/**
+ * Startup recovery (project brief section 29): a session still 'running'
+ * when the process starts fresh cannot actually be running anymore — the
+ * process that was running it is gone. Never silently promoted to
+ * 'completed' (that would fabricate a result); always 'failed' with an
+ * explicit NEEDS_REVIEW note so a human can decide whether to re-run it.
+ */
+export function recoverStaleResearchSessions(): string[] {
+  const stale = listRunningResearchSessions();
+  for (const s of stale) {
+    completeResearchSession(s.id, {
+      status: "failed",
+      summary: s.summary || "NEEDS_REVIEW: interrupted by an agent restart before this session finished.",
+    });
+  }
+  return stale.map((s) => s.id);
+}
+
 export function addQuery(id: string, query: string): ResearchSession {
   const session = mustGet(id);
   return patch(id, { queries_json: JSON.stringify([...session.queries, query]) });

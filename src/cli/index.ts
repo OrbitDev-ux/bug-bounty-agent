@@ -9,6 +9,8 @@ import { finishRun, listRuns, listRunningRuns } from "../domain/agentRuns.js";
 import { getSchedulerState } from "../domain/schedulerState.js";
 import { runDiscovery, onboardProgramFromPolicyPage, finalizeApprovedTask, runResearchTask, draftReportForApprovedFinding, simulateSubmission } from "../agent/orchestrator.js";
 import { runWorkerLoop, runOnce, pauseAgent, resumeAgent, stopAgent } from "../agent/scheduler.js";
+import { runStartupRecovery } from "../agent/startupRecovery.js";
+import { checkHealth } from "../services/health.js";
 import { handleApprovalDecision } from "../telegram/approvalHandler.js";
 import { sendDailySummary } from "../telegram/bot.js";
 import { buildDailySummary, formatDailySummaryMessage } from "../telegram/dailySummary.js";
@@ -33,6 +35,12 @@ agent
   .option("--max-browser-ops <n>", "Override max Safari operations this run")
   .option("--max-retries <n>", "Override max recovery retries per task this run")
   .action(async (opts) => {
+    const recovery = runStartupRecovery();
+    if (recovery.recoveredTaskIds.length || recovery.recoveredResearchSessionIds.length || recovery.expiredApprovalCount || recovery.schedulerStateReset) {
+      console.log(
+        `Startup recovery: ${recovery.recoveredTaskIds.length} task(s), ${recovery.recoveredResearchSessionIds.length} research session(s) recovered, ${recovery.expiredApprovalCount} approval(s) expired, scheduler reset: ${recovery.schedulerStateReset}`,
+      );
+    }
     console.log(`Telegram approval gateway: ${telegramConfigStatus()}`);
     const limits = {
       maxTasksPerRun: opts.maxTasks ? Number(opts.maxTasks) : opts.daemon ? 100 : undefined,
@@ -106,6 +114,29 @@ agent
     console.log(`Findings: ${listFindings().length}`);
     console.log(`Pending approvals: ${status.pendingApprovals}`);
     console.log(`Telegram approval gateway: ${telegramConfigStatus()}`);
+  });
+
+agent
+  .command("health")
+  .description("Runs all health checks (SQLite, Claude CLI, Safari, Telegram, Scheduler, Queue) and reports OK/DEGRADED/FAILED")
+  .action(async () => {
+    const report = await checkHealth();
+    console.log(`Overall: ${report.overall}`);
+    for (const c of report.checks) console.log(`  ${c.component}: ${c.status} — ${c.detail}`);
+    if (report.overall === "FAILED") process.exitCode = 1;
+  });
+
+agent
+  .command("restart")
+  .description("Runs startup recovery, then the worker loop (equivalent to stop + start).")
+  .action(async () => {
+    stopAgent();
+    const recovery = runStartupRecovery();
+    console.log(
+      `Startup recovery: ${recovery.recoveredTaskIds.length} task(s), ${recovery.recoveredResearchSessionIds.length} research session(s) recovered, ${recovery.expiredApprovalCount} approval(s) expired.`,
+    );
+    const summary = await runWorkerLoop({});
+    console.log(`Worker loop finished: ${summary.tasksExecuted} task(s) executed. Stopped: ${summary.stoppedReason}`);
   });
 
 // --- program ---

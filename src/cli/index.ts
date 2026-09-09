@@ -18,8 +18,9 @@ import { runStartupRecovery } from "../agent/startupRecovery.js";
 import { installDaemon, uninstallDaemon, getDaemonStatus } from "../agent/daemon.js";
 import { checkHealth } from "../services/health.js";
 import { handleApprovalDecision } from "../telegram/approvalHandler.js";
-import { sendDailySummary } from "../telegram/bot.js";
-import { buildDailySummary, formatDailySummaryMessage } from "../telegram/dailySummary.js";
+import { sendDailySummary, sendWeeklySummary } from "../telegram/bot.js";
+import { buildDailySummary, formatDailySummaryMessage, buildWeeklySummary, formatWeeklySummaryMessage } from "../telegram/dailySummary.js";
+import { backupDatabase, verifyBackup, restoreDatabase } from "../services/backup.js";
 import { getAgentStatus, getProgramStats, getFindingStats, getRevenueTimeline } from "../services/dashboard.js";
 import { getMetrics, getROI } from "../services/metrics.js";
 import { telegramConfigStatus } from "../config/env.js";
@@ -309,8 +310,10 @@ findingCmd
   .command("list")
   .option("--status <status>", "Filter by status")
   .action((opts) => {
+    // Bounty state lives on the Earning ledger, not Finding.bountyStatus —
+    // see `bba earnings summary` / `dashboard status` for real paid figures.
     for (const f of listFindings(opts.status)) {
-      console.log(`${f.id}  [${f.status}/${f.bountyStatus}]  ${f.title}  asset=${f.asset}`);
+      console.log(`${f.id}  [${f.status}]  ${f.title}  asset=${f.asset}`);
     }
   });
 
@@ -556,6 +559,54 @@ telegramCmd
     }
     await sendDailySummary();
     console.log("Daily summary sent to Telegram.");
+  });
+
+telegramCmd
+  .command("weekly-summary")
+  .description("Sends the weekly agent report to Telegram if configured, otherwise prints it locally.")
+  .action(async () => {
+    const summary = buildWeeklySummary();
+    const text = formatWeeklySummaryMessage(summary);
+    if (telegramConfigStatus() !== "ready") {
+      console.log("Telegram not configured — printing locally instead:\n");
+      console.log(text);
+      return;
+    }
+    await sendWeeklySummary();
+    console.log("Weekly summary sent to Telegram.");
+  });
+
+// --- db (backup/restore, section 59) ---
+const dbCmd = program.command("db").description("Local SQLite backup/restore");
+
+dbCmd
+  .command("backup")
+  .option("--out <path>", "Destination file (default: data/backups/backup-<timestamp>.sqlite)")
+  .description("Creates a consistent backup (VACUUM INTO) and verifies it's actually readable before reporting success.")
+  .action((opts) => {
+    const result = backupDatabase(opts.out);
+    console.log(`Backup written: ${result.path} (${result.sizeBytes} bytes)`);
+    console.log(`Verified table counts: ${JSON.stringify(result.tableCounts)}`);
+  });
+
+dbCmd
+  .command("verify-backup <path>")
+  .description("Opens a backup file read-only and confirms it's a valid, readable database.")
+  .action((path: string) => {
+    const result = verifyBackup(path);
+    console.log(`Valid: ${result.ok}`);
+    if (result.ok) console.log(`Table counts: ${JSON.stringify(result.tableCounts)}`);
+    else console.error(`Error: ${result.error}`);
+    if (!result.ok) process.exitCode = 1;
+  });
+
+dbCmd
+  .command("restore <path>")
+  .description("Restores from a backup file onto the live database. Takes a safety backup of the current live file first (never restores blind).")
+  .action((path: string) => {
+    const result = restoreDatabase(path);
+    console.log(`Restored to: ${result.restoredTo}`);
+    console.log(`Pre-restore safety backup: ${result.safetyBackupPath}`);
   });
 
 program.parseAsync(process.argv);

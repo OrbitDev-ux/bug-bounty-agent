@@ -84,6 +84,36 @@ demonstrate the full pipeline even without a configured bot.
   research sessions, candidates, approvals, reports, and bounties **paid**
   (never awarded/pending/simulated) for the day, plus current queue depth.
 
+## v0.3.2: the bot no longer dies from a single failed handler (real incident)
+
+Before this fix, `getBot()` never installed a `bot.catch()` handler.
+grammy's contract is explicit about this: an unhandled error thrown inside
+*any* middleware/handler propagates out of `bot.start()` — with no handler
+installed, that kills the entire long-running process. This happened for
+real: a user re-tapped a findings-filter button, `editMessageText`'s new
+content happened to be byte-identical to the current message (Telegram
+rejects that specific case with a 400 "message is not modified" — a common,
+harmless, expected outcome, not a bug), nothing caught it, and the bot
+silently stopped responding to every command for every user until someone
+noticed and manually restarted the process.
+
+Fixed two ways:
+1. `getBot()` now installs `bot.catch()` — any handler exception is logged
+   (`agent_alert`, and to stderr) and the bot keeps polling for the next
+   update. One user's one bad interaction can no longer take the bot down
+   for everyone.
+2. `safeEditMessageText()` (`src/telegram/bot.ts`, all 6 `editMessageText`
+   call sites route through it) specifically swallows only the "message is
+   not modified" case at its source — every other error still surfaces
+   normally. Covered by `test/bot-error-handling.test.ts` without needing a
+   live Telegram connection (it's tested against a fake `ctx` object).
+
+Not yet covered: if the process crashes for a reason *outside* grammy's
+middleware (e.g. an uncaught exception on a totally separate timer, or the
+process being killed), nothing currently auto-restarts it — see
+docs/daemon.md for the (not-installed-by-default) launchd option, which
+does provide `KeepAlive` restart-on-crash for exactly that case.
+
 ## v0.3.2: Program Candidate Discovery
 
 `/discover "<topic>"`, `/candidates`, `/candidate <id>` and the

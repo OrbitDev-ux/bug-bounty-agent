@@ -1,4 +1,4 @@
-import { Bot, InlineKeyboard } from "grammy";
+import { Bot, InlineKeyboard, GrammyError } from "grammy";
 import { env, telegramConfigStatus } from "../config/env.js";
 import { createApproval, setTelegramMessageId, getApproval } from "../domain/approvals.js";
 import {
@@ -71,6 +71,18 @@ export function getBot(): Bot {
   }
   bot = new Bot(env.telegramBotToken);
   wireHandlers(bot);
+  // Without this, ANY unhandled error thrown inside ANY handler (a bad
+  // Telegram API call, a domain function throwing, etc.) propagates out of
+  // bot.start() and kills the entire long-running process — silently, with
+  // no auto-restart, until someone notices the bot stopped responding. Real
+  // incident: an `editMessageText` call whose new content happened to be
+  // byte-identical to the current message (a harmless, common Telegram API
+  // quirk) threw, had no handler, and took the whole bot down. One user
+  // update failing must never take down the bot for every other update.
+  bot.catch((err) => {
+    log("agent_alert", { component: "telegram_bot", note: "unhandled error in a Telegram update handler — bot stays up", error: err.message });
+    console.error("Telegram handler error (bot stays running):", err.error);
+  });
   return bot;
 }
 
@@ -419,7 +431,7 @@ function wireHandlers(b: Bot): void {
           const updated = toggleChecklistItem(parts[2]!, Number(parts[3]));
           await ctx.answerCallbackQuery();
           if (ctx.callbackQuery.message) {
-            await ctx.editMessageText(formatEnrollmentChecklist(updated), { reply_markup: enrollmentChecklistKeyboard(updated) });
+            await safeEditMessageText(ctx, formatEnrollmentChecklist(updated), { reply_markup: enrollmentChecklistKeyboard(updated) });
           }
         } catch (err) {
           await ctx.answerCallbackQuery({ text: (err as Error).message, show_alert: true });
@@ -450,7 +462,7 @@ function wireHandlers(b: Bot): void {
       const period = earningsPeriodMatch[1] as EarningsPeriod;
       await ctx.answerCallbackQuery();
       if (ctx.callbackQuery.message) {
-        await ctx.editMessageText(formatEarnings(period), { reply_markup: earningsPeriodKeyboard(period) });
+        await safeEditMessageText(ctx, formatEarnings(period), { reply_markup: earningsPeriodKeyboard(period) });
       }
       return;
     }
@@ -465,7 +477,7 @@ function wireHandlers(b: Bot): void {
       const summary = await confirmControlAction(controlMatch[1] as Capability);
       await ctx.answerCallbackQuery({ text: summary });
       if (ctx.callbackQuery.message) {
-        await ctx.editMessageText(`${ctx.callbackQuery.message.text ?? ""}\n\n-> ${summary}`);
+        await safeEditMessageText(ctx, `${ctx.callbackQuery.message.text ?? ""}\n\n-> ${summary}`);
       }
       return;
     }
@@ -492,7 +504,7 @@ function wireHandlers(b: Bot): void {
       }
       await ctx.answerCallbackQuery({ text: "Updated." });
       if (ctx.callbackQuery.message) {
-        await ctx.editMessageText(renderSettings(), { reply_markup: settingsKeyboard() });
+        await safeEditMessageText(ctx, renderSettings(), { reply_markup: settingsKeyboard() });
       }
       return;
     }
@@ -521,7 +533,8 @@ function wireHandlers(b: Bot): void {
 
     if (result.ok && ctx.callbackQuery.message) {
       const original = ctx.callbackQuery.message.text ?? "";
-      await ctx.editMessageText(
+      await safeEditMessageText(
+        ctx,
         formatDecisionMessage(original, parsed.action === "approve" ? "approved" : "rejected", String(telegramUserId)),
       );
     }
@@ -595,7 +608,24 @@ async function sendFindingsPage(ctx: any, filter: FindingFilter, page: number): 
 async function editFindingsPage(ctx: any, filter: FindingFilter, page: number): Promise<void> {
   const { text, totalPages } = formatFindingsList(listFindings(), filter, page);
   if (!ctx.callbackQuery.message) return;
-  await ctx.editMessageText(text, { reply_markup: totalPages > 1 ? findingsPaginationKeyboard(filter, page, totalPages) : findingsFilterKeyboard(filter) });
+  await safeEditMessageText(ctx, text, { reply_markup: totalPages > 1 ? findingsPaginationKeyboard(filter, page, totalPages) : findingsFilterKeyboard(filter) });
+}
+
+/**
+ * ctx.editMessageText, but never throws for the harmless "message is not
+ * modified" case (a common, expected outcome when a user re-taps a button
+ * that doesn't change the rendered content) — every other error still
+ * propagates normally. See the real incident note on getBot() above: this
+ * exact error, unhandled, took the whole bot process down.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function safeEditMessageText(ctx: any, text: string, other?: any): Promise<void> {
+  try {
+    await ctx.editMessageText(text, other);
+  } catch (err) {
+    if (err instanceof GrammyError && err.description.includes("message is not modified")) return;
+    throw err;
+  }
 }
 
 function findCandidateRef(ref: string | undefined) {

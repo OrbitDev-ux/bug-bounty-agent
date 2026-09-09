@@ -328,7 +328,18 @@ export interface ChatMessage {
 
 // --- v0.3: Command Router ---
 
-export type IntentCategory = "CHAT" | "READ_ONLY_QUERY" | "CONTROL_ACTION" | "APPROVAL_ACTION" | "UNSAFE_ACTION" | "UNKNOWN";
+/**
+ * RESEARCH_ACTION (v0.3.2): unlike CONTROL_ACTION, this executes directly
+ * from chat text with no confirm tap — deliberately, because program
+ * candidate discovery/research is safe-by-construction (see
+ * docs/program-enrollment.md "The core guarantee"): it only ever reads
+ * public web pages and writes to program_candidates, which is structurally
+ * isolated from Task creation and evaluateScope() — there is no code path
+ * from here to a live target. That's a materially different risk profile
+ * than CONTROL_AGENT_PAUSE/RESUME (which changes real scheduler state), so
+ * it doesn't need the same confirm-before-executing friction.
+ */
+export type IntentCategory = "CHAT" | "READ_ONLY_QUERY" | "CONTROL_ACTION" | "RESEARCH_ACTION" | "APPROVAL_ACTION" | "UNSAFE_ACTION" | "UNKNOWN";
 
 /** Fixed, enumerable capabilities the router may invoke — never freeform code execution (section 11). */
 export type Capability =
@@ -341,6 +352,8 @@ export type Capability =
   | "CONTROL_AGENT_PAUSE"
   | "CONTROL_AGENT_RESUME"
   | "CONTROL_AGENT_START"
+  | "CANDIDATE_DISCOVER"
+  | "CANDIDATE_RESEARCH"
   | "DECIDE_APPROVAL";
 
 // --- v0.3: Settings ---

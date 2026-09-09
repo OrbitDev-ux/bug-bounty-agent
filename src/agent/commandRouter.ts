@@ -9,6 +9,7 @@
 
 import type { Capability, IntentCategory } from "../domain/types.js";
 import { findPendingApprovalByRef } from "./capabilities.js";
+import { listCandidates } from "../domain/programCandidates.js";
 
 export interface ClassifiedIntent {
   category: IntentCategory;
@@ -46,6 +47,37 @@ const CONTROL_PATTERNS: Pattern[] = [
   // CONTROL_AGENT_RESUME's handler in capabilities.ts.
   { capability: "CONTROL_AGENT_START", category: "CONTROL_ACTION", regex: /작업\s*시작|일\s*시작|자동화\s*시작|버그바운티.*시작|start\s*(the\s*)?(agent|worker|automation)|계속해/i },
 ];
+
+/**
+ * Program candidate discovery/research (section 3-9 of the v0.3.2 brief).
+ * Deliberately checked before READ_PATTERNS: a message like "candidate 조사해줘"
+ * would otherwise false-positive-match READ_FINDINGS' "candidate" keyword.
+ * If an existing candidate's name is mentioned, treat it as a deep-research
+ * request for that specific candidate; otherwise treat the whole phrase
+ * (minus the trigger word) as a fresh discovery search topic.
+ */
+const RESEARCH_TRIGGER_PATTERN = /조사해\S*|리서치\S*|찾아줘|찾아봐|research\b|검색해\S*/i;
+
+function classifyResearchIntent(trimmed: string): ClassifiedIntent | null {
+  if (!RESEARCH_TRIGGER_PATTERN.test(trimmed)) return null;
+
+  const lower = trimmed.toLowerCase();
+  const existing = listCandidates().find((c) => c.name.length >= 3 && lower.includes(c.name.toLowerCase()));
+  if (existing) {
+    return {
+      category: "RESEARCH_ACTION",
+      capability: "CANDIDATE_RESEARCH",
+      args: { candidateId: existing.id },
+      reason: `Matched a research request for existing candidate "${existing.name}".`,
+    };
+  }
+
+  const topic = trimmed.replace(RESEARCH_TRIGGER_PATTERN, " ").replace(/\s+/g, " ").trim();
+  if (topic.length >= 2) {
+    return { category: "RESEARCH_ACTION", capability: "CANDIDATE_DISCOVER", args: { topic }, reason: `Matched a discovery request with topic "${topic}".` };
+  }
+  return null;
+}
 
 const READ_PATTERNS: Pattern[] = [
   { capability: "READ_APPROVALS", category: "READ_ONLY_QUERY", regex: /승인\s*대기|approvals?\b|대기\s*중인\s*작업/i },
@@ -89,6 +121,9 @@ export function classifyIntent(text: string): ClassifiedIntent {
       return { category: p.category, capability: p.capability, reason: `Matched a control-action phrase for ${p.capability}.` };
     }
   }
+
+  const researchIntent = classifyResearchIntent(trimmed);
+  if (researchIntent) return researchIntent;
 
   for (const p of READ_PATTERNS) {
     if (p.regex.test(trimmed)) {

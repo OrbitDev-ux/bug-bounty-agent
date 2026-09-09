@@ -90,6 +90,24 @@ success odds or expected revenue, and that disclaimer is carried into every
 Telegram/CLI rendering of the score. `compareCandidates()` /
 `bba program compare` sort by this score, never by reward alone.
 
+## Chat-triggered auto-research (v0.3.2)
+
+Free-text chat (`/chat` mode) recognizes research phrasing directly — e.g.
+"Shopify 버그바운티 조사해줘" or "research public bug bounty programs" — and
+executes `CANDIDATE_DISCOVER`/`CANDIDATE_RESEARCH` **immediately, with no
+confirm tap**, unlike `CONTROL_AGENT_PAUSE`/`RESUME` (`src/agent/
+commandRouter.ts` `classifyResearchIntent()`, new `IntentCategory:
+"RESEARCH_ACTION"`). This is a deliberate exception to the project's usual
+confirm-before-executing rule for chat-triggered actions, justified by the
+same structural guarantee as everywhere else in this feature: discovery/
+research only ever reads public web pages and writes to
+`program_candidates`, which has no code path to a live target — so there is
+nothing here for a confirm tap to actually be protecting against. If the
+message mentions an existing candidate's name, it deep-researches that one;
+otherwise the phrase (minus the trigger verb) becomes a fresh discovery
+search topic. Verified live: "Shopify 버그바운티 프로그램 조사해줘" through
+`handleChatText()` found 2 real candidates with no confirmation step.
+
 ## Telegram
 
 Every step is reachable from Telegram — nothing in this pipeline requires

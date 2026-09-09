@@ -11,6 +11,7 @@ import { summarizeEarnings, summarizeEarningsByCurrency } from "../domain/earnin
 import { getAgentStatus } from "../services/dashboard.js";
 import { pauseAgent, resumeAgent } from "./scheduler.js";
 import { getWorkerProcessStatus, startBoundedWorkerRun } from "./workerProcess.js";
+import { discoverAndCreateCandidates, researchCandidate } from "../services/programResearch.js";
 import { handleApprovalDecision } from "../telegram/approvalHandler.js";
 import type { Capability } from "../domain/types.js";
 
@@ -99,6 +100,23 @@ export async function executeCapability(capability: Capability, args: Record<str
       } catch (err) {
         return { ok: false, summary: (err as Error).message };
       }
+    }
+    case "CANDIDATE_DISCOVER": {
+      const topic = args.topic;
+      if (!topic) return { ok: false, summary: "missing topic" };
+      const result = await discoverAndCreateCandidates(topic);
+      if (!result.ok) return { ok: false, summary: `Discovery failed: ${result.error ?? "unknown error"}` };
+      const summary = `Found ${result.created.length} new candidate(s), ${result.deduped} already known (cost $${result.costUsd.toFixed(4)}).`;
+      return { ok: true, summary, data: result };
+    }
+    case "CANDIDATE_RESEARCH": {
+      const candidateId = args.candidateId;
+      if (!candidateId) return { ok: false, summary: "missing candidateId" };
+      const result = await researchCandidate(candidateId);
+      if (!result.ok || !result.candidate) return { ok: false, summary: `Research failed: ${result.error ?? "unknown error"}` };
+      const c = result.candidate;
+      const summary = `${c.name} researched -> stage=${c.stage}. Scope: ${c.scopeClarity}, Policy: ${c.policyClarity}, Automation: ${c.automationPolicy} (cost $${result.costUsd.toFixed(4)}).`;
+      return { ok: true, summary, data: c };
     }
     case "DECIDE_APPROVAL": {
       const approvalId = args.approvalId;

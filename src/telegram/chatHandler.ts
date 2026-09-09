@@ -61,6 +61,16 @@ export async function handleChatText(telegramUserId: string, text: string): Prom
     return { text: reply, confirmCallbackData: `control:${intent.capability}:confirm` };
   }
 
+  if (intent.category === "RESEARCH_ACTION" && intent.capability && intent.args) {
+    // Executes directly, no confirm tap — see the IntentCategory doc comment
+    // in domain/types.ts for why this is safe-by-construction (never
+    // touches a live target). Can take a minute or two (real Safari/Claude
+    // calls) before this resolves.
+    const result = await executeCapability(intent.capability, intent.args);
+    appendChatMessage(telegramUserId, "assistant", result.summary);
+    return { text: result.summary };
+  }
+
   if (intent.category === "APPROVAL_ACTION" && intent.capability === "DECIDE_APPROVAL" && intent.args) {
     const result = await executeCapability("DECIDE_APPROVAL", { ...intent.args, telegramUserId });
     appendChatMessage(telegramUserId, "assistant", result.summary);

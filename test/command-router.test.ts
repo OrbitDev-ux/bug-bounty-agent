@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { freshDb } from "./testDb.js";
 import { classifyIntent } from "../src/agent/commandRouter.js";
 import { createApproval } from "../src/domain/approvals.js";
+import { createCandidate } from "../src/domain/programCandidates.js";
 
 beforeEach(() => {
   freshDb();
@@ -51,6 +52,42 @@ test("CONTROL_ACTION: 'start working' phrasing that isn't literally 'resume' map
   const intent = classifyIntent("이제 버그바운티 작업 시작하자");
   assert.equal(intent.category, "CONTROL_ACTION");
   assert.equal(intent.capability, "CONTROL_AGENT_START");
+});
+
+// --- RESEARCH_ACTION (v0.3.2): executes directly, no confirm tap — see the
+// IntentCategory doc comment in domain/types.ts for why. These tests only
+// exercise the deterministic classification, never the real Safari/Claude
+// call behind CANDIDATE_DISCOVER/CANDIDATE_RESEARCH (see
+// test/worker-process.test.ts and test/programCandidates.test.ts for the
+// project's standing discipline against live network calls in the suite).
+
+test("RESEARCH_ACTION: an existing candidate's name + a research verb resolves to CANDIDATE_RESEARCH for that candidate", () => {
+  const candidate = createCandidate({ name: "Acme Corp Bug Bounty", platform: "self-hosted", officialUrl: "https://acme.example.com/security" });
+  const intent = classifyIntent("Acme Corp Bug Bounty 조사해줘");
+  assert.equal(intent.category, "RESEARCH_ACTION");
+  assert.equal(intent.capability, "CANDIDATE_RESEARCH");
+  assert.equal(intent.args?.candidateId, candidate.id);
+});
+
+test("RESEARCH_ACTION: no matching candidate name falls back to CANDIDATE_DISCOVER with the topic extracted", () => {
+  const intent = classifyIntent("실리콘밸리 스타트업 버그바운티 프로그램 조사해줘");
+  assert.equal(intent.category, "RESEARCH_ACTION");
+  assert.equal(intent.capability, "CANDIDATE_DISCOVER");
+  const topic = intent.args?.topic ?? "";
+  assert.ok(topic.includes("버그바운티"));
+  assert.ok(!topic.includes("조사해"), "the trigger verb itself should be stripped from the topic");
+});
+
+test("RESEARCH_ACTION: English 'research' phrasing also triggers discovery", () => {
+  const intent = classifyIntent("please research public bug bounty programs");
+  assert.equal(intent.category, "RESEARCH_ACTION");
+  assert.equal(intent.capability, "CANDIDATE_DISCOVER");
+});
+
+test("RESEARCH_ACTION is checked before READ_FINDINGS so 'candidate' in a research phrase doesn't get misrouted", () => {
+  const intent = classifyIntent("새 candidate 프로그램 조사해줘");
+  assert.equal(intent.category, "RESEARCH_ACTION");
+  assert.notEqual(intent.capability, "READ_FINDINGS");
 });
 
 test("APPROVAL_ACTION: '#<id> 승인' resolves to a real pending approval by id prefix", () => {

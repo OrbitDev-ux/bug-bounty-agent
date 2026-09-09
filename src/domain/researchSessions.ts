@@ -104,8 +104,8 @@ export function getResearchSession(id: string): ResearchSession | null {
 export function listResearchSessions(status?: ResearchSessionStatus): ResearchSession[] {
   const db = getDb();
   const rows = status
-    ? (db.prepare("SELECT * FROM research_sessions WHERE status = ? ORDER BY created_at DESC").all(status) as unknown as ResearchSessionRow[])
-    : (db.prepare("SELECT * FROM research_sessions ORDER BY created_at DESC").all() as unknown as ResearchSessionRow[]);
+    ? (db.prepare("SELECT * FROM research_sessions WHERE status = ? ORDER BY created_at DESC, rowid DESC").all(status) as unknown as ResearchSessionRow[])
+    : (db.prepare("SELECT * FROM research_sessions ORDER BY created_at DESC, rowid DESC").all() as unknown as ResearchSessionRow[]);
   return rows.map(rowToSession);
 }
 

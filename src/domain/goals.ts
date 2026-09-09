@@ -53,8 +53,8 @@ export function listGoals(includeArchived = false): Goal[] {
   const db = getDb();
   const rows = (
     includeArchived
-      ? db.prepare("SELECT * FROM goals ORDER BY created_at DESC").all()
-      : db.prepare("SELECT * FROM goals WHERE archived_at IS NULL ORDER BY created_at DESC").all()
+      ? db.prepare("SELECT * FROM goals ORDER BY created_at DESC, rowid DESC").all()
+      : db.prepare("SELECT * FROM goals WHERE archived_at IS NULL ORDER BY created_at DESC, rowid DESC").all()
   ) as unknown as GoalRow[];
   return rows.map(rowToGoal);
 }

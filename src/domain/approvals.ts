@@ -86,8 +86,8 @@ export function getApproval(id: string): Approval | null {
 export function listApprovals(status?: ApprovalStatus): Approval[] {
   const db = getDb();
   const rows = status
-    ? (db.prepare("SELECT * FROM approvals WHERE status = ? ORDER BY created_at DESC").all(status) as unknown as ApprovalRow[])
-    : (db.prepare("SELECT * FROM approvals ORDER BY created_at DESC").all() as unknown as ApprovalRow[]);
+    ? (db.prepare("SELECT * FROM approvals WHERE status = ? ORDER BY created_at DESC, rowid DESC").all(status) as unknown as ApprovalRow[])
+    : (db.prepare("SELECT * FROM approvals ORDER BY created_at DESC, rowid DESC").all() as unknown as ApprovalRow[]);
   return rows.map(rowToApproval);
 }
 

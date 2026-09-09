@@ -85,7 +85,7 @@ export function getReportByFinding(findingId: string): Report | null {
 
 export function listReports(): Report[] {
   const db = getDb();
-  const rows = db.prepare("SELECT * FROM reports ORDER BY created_at DESC").all() as unknown as ReportRow[];
+  const rows = db.prepare("SELECT * FROM reports ORDER BY created_at DESC, rowid DESC").all() as unknown as ReportRow[];
   return rows.map(rowToReport);
 }
 

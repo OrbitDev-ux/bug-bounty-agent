@@ -86,8 +86,8 @@ export function getProgram(id: string): Program | null {
 export function listPrograms(status?: ProgramStatus): Program[] {
   const db = getDb();
   const rows = status
-    ? (db.prepare("SELECT * FROM programs WHERE status = ? ORDER BY created_at DESC").all(status) as unknown as ProgramRow[])
-    : (db.prepare("SELECT * FROM programs ORDER BY created_at DESC").all() as unknown as ProgramRow[]);
+    ? (db.prepare("SELECT * FROM programs WHERE status = ? ORDER BY created_at DESC, rowid DESC").all(status) as unknown as ProgramRow[])
+    : (db.prepare("SELECT * FROM programs ORDER BY created_at DESC, rowid DESC").all() as unknown as ProgramRow[]);
   return rows.map(rowToProgram);
 }
 

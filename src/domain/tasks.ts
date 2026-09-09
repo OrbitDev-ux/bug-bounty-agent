@@ -110,8 +110,8 @@ export function getTask(id: string): Task | null {
 export function listTasks(status?: TaskStatus): Task[] {
   const db = getDb();
   const rows = status
-    ? (db.prepare("SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC").all(status) as unknown as TaskRow[])
-    : (db.prepare("SELECT * FROM tasks ORDER BY created_at DESC").all() as unknown as TaskRow[]);
+    ? (db.prepare("SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC, rowid DESC").all(status) as unknown as TaskRow[])
+    : (db.prepare("SELECT * FROM tasks ORDER BY created_at DESC, rowid DESC").all() as unknown as TaskRow[]);
   return rows.map(rowToTask);
 }
 

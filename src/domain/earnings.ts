@@ -170,7 +170,7 @@ function mustGetEarning(id: string): Earning {
 
 export function listEarnings(): Earning[] {
   const db = getDb();
-  const rows = db.prepare("SELECT * FROM earnings ORDER BY created_at DESC").all() as unknown as EarningRow[];
+  const rows = db.prepare("SELECT * FROM earnings ORDER BY created_at DESC, rowid DESC").all() as unknown as EarningRow[];
   return rows.map(rowToEarning);
 }
 

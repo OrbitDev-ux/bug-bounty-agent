@@ -142,15 +142,15 @@ export function getFinding(id: string): Finding | null {
 export function listFindings(status?: FindingStatus): Finding[] {
   const db = getDb();
   const rows = status
-    ? (db.prepare("SELECT * FROM findings WHERE status = ? ORDER BY created_at DESC").all(status) as unknown as FindingRow[])
-    : (db.prepare("SELECT * FROM findings ORDER BY created_at DESC").all() as unknown as FindingRow[]);
+    ? (db.prepare("SELECT * FROM findings WHERE status = ? ORDER BY created_at DESC, rowid DESC").all(status) as unknown as FindingRow[])
+    : (db.prepare("SELECT * FROM findings ORDER BY created_at DESC, rowid DESC").all() as unknown as FindingRow[]);
   return rows.map(rowToFinding);
 }
 
 /** All findings for a program, for duplicate-comparison purposes. */
 export function listFindingsForProgram(programId: string): Finding[] {
   const db = getDb();
-  const rows = db.prepare("SELECT * FROM findings WHERE program_id = ? ORDER BY created_at DESC").all(programId) as unknown as FindingRow[];
+  const rows = db.prepare("SELECT * FROM findings WHERE program_id = ? ORDER BY created_at DESC, rowid DESC").all(programId) as unknown as FindingRow[];
   return rows.map(rowToFinding);
 }
 

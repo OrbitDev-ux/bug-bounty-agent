@@ -8,7 +8,7 @@ import type { Program, Finding, Task, FindingStatus } from "../domain/types.js";
 import { getFunnelMetrics, getConversionRates, getFindingProfitabilityByCategory } from "../services/analytics.js";
 import { listPrograms } from "../domain/programs.js";
 import { getProgramAnalytics, type TimelineWindow } from "../services/dashboard.js";
-import { summarizeEarningsByCurrency } from "../domain/earnings.js";
+import { summarizeEarningsByCurrency, listEarnings } from "../domain/earnings.js";
 import type { GoalProgress } from "../domain/goals.js";
 
 export function mainMenuKeyboard(): InlineKeyboard {
@@ -46,15 +46,23 @@ export function findingsFilterKeyboard(active: FindingFilter): InlineKeyboard {
   return kb;
 }
 
-function matchesFindingFilter(f: Finding, filter: FindingFilter): boolean {
+function matchesFindingFilter(f: Finding, filter: FindingFilter, paidFindingIds: Set<string>): boolean {
   if (filter === "all") return true;
   if (filter === "new") return f.status === "discovered";
-  if (filter === "paid") return f.bountyStatus === "paid";
+  // Bounty state lives on the Earning ledger, not Finding.bountyStatus —
+  // that field is never updated by the real pipeline (markAwarded/markPaid
+  // operate on Earning rows). See src/services/metrics.ts for the same fix.
+  if (filter === "paid") return paidFindingIds.has(f.id);
   return f.status === (filter as FindingStatus);
 }
 
+function getPaidFindingIds(): Set<string> {
+  return new Set(listEarnings().filter((e) => e.bountyStatus === "paid").map((e) => e.findingId));
+}
+
 export function formatFindingsList(findings: Finding[], filter: FindingFilter, page: number, pageSize = 8): { text: string; totalPages: number } {
-  const filtered = findings.filter((f) => matchesFindingFilter(f, filter));
+  const paidFindingIds = filter === "paid" ? getPaidFindingIds() : new Set<string>();
+  const filtered = findings.filter((f) => matchesFindingFilter(f, filter, paidFindingIds));
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const clampedPage = Math.min(Math.max(0, page), totalPages - 1);
   const slice = filtered.slice(clampedPage * pageSize, clampedPage * pageSize + pageSize);

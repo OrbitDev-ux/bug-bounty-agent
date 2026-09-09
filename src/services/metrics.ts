@@ -9,7 +9,7 @@ import { listResearchSessions } from "../domain/researchSessions.js";
 import { listFindings } from "../domain/findings.js";
 import { listApprovals } from "../domain/approvals.js";
 import { listReports } from "../domain/reports.js";
-import { summarizeEarnings } from "../domain/earnings.js";
+import { summarizeEarnings, listEarnings } from "../domain/earnings.js";
 import { listRuns } from "../domain/agentRuns.js";
 
 export interface AgentMetrics {
@@ -37,7 +37,11 @@ export function getMetrics(): AgentMetrics {
     approvedFindings: approvals.filter((a) => a.status === "approved" && a.findingId).length,
     reportsDrafted: listReports().length,
     accepted: findings.filter((f) => f.status === "accepted").length,
-    paid: findings.filter((f) => f.bountyStatus === "paid").length,
+    // Bounty state lives on the Earning ledger, not Finding.bountyStatus —
+    // that field is set at Finding creation ('not_applicable') and never
+    // updated by the real pipeline (markAwarded/markPaid operate on
+    // Earning rows). Counting from findings here would always read 0.
+    paid: listEarnings().filter((e) => e.bountyStatus === "paid").length,
     revenue: earnings.allTime, // paid-only, per summarizeEarnings()
   };
 }

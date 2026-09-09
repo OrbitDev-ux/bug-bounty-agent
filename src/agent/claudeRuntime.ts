@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { env } from "../config/env.js";
 import { getSettings } from "../domain/settings.js";
+import { recordClaudeCost } from "../services/costTracking.js";
 
 /**
  * Thin wrapper around the local `claude` CLI in non-interactive mode
@@ -107,6 +108,8 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
     numTurns: parsed.num_turns ?? 0,
     sessionId: parsed.session_id ?? null,
   };
+
+  recordClaudeCost(base.costUsd, `claude -p (model=${opts.model ?? "default"}, ${opts.mcpConfigPath ? "with MCP" : "no MCP"})`);
 
   if (parsed.is_error) {
     return { ok: false, ...base, error: parsed.errors?.join("; ") ?? parsed.error ?? "claude reported is_error=true" };

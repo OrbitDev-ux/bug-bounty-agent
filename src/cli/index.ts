@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { listPrograms, createProgram } from "../domain/programs.js";
+import { listPrograms, createProgram, getProgram } from "../domain/programs.js";
 import { listTasks, getTask, cancelTask } from "../domain/tasks.js";
 import { listFindings, getFinding } from "../domain/findings.js";
 import { listApprovals, getApproval } from "../domain/approvals.js";
 import { summarizeEarnings, markAwarded, markPaid, getEarning } from "../domain/earnings.js";
 import { recordRevenueAudit } from "../domain/revenueAudit.js";
 import { createGoal, listGoalProgress } from "../domain/goals.js";
+import { checkGoalMilestones } from "../domain/goalAlerts.js";
 import { recordCost } from "../domain/costs.js";
+import { bountyAwardedAlert, bountyPaidAlert, goalMilestoneAlert } from "../agent/alerts.js";
 import { finishRun, listRuns, listRunningRuns } from "../domain/agentRuns.js";
 import { getSchedulerState } from "../domain/schedulerState.js";
 import { runDiscovery, onboardProgramFromPolicyPage, finalizeApprovedTask, runResearchTask, draftReportForApprovedFinding, simulateSubmission } from "../agent/orchestrator.js";
@@ -408,7 +410,7 @@ earningsCmd
   .option("--who <who>", "Telegram user id or operator name, for the revenue audit trail", "cli-local-operator")
   .option("--reason <reason>", "Why — e.g. 'program confirmed via email'", "")
   .description("Records that a bounty was awarded (not yet paid — see `earnings pay`). This is a manual bookkeeping step; there is no platform API integration.")
-  .action((earningId: string, opts) => {
+  .action(async (earningId: string, opts) => {
     const before = getEarning(earningId);
     const earning = markAwarded(earningId, { amount: Number(opts.amount), currency: opts.currency });
     recordRevenueAudit({
@@ -421,6 +423,8 @@ earningsCmd
       reason: opts.reason,
     });
     console.log(`Earning ${earning.id} -> awarded ($${earning.amount} ${earning.currency})`);
+    const program = getProgram(earning.programId);
+    await bountyAwardedAlert(program?.name ?? "unknown program", earning.amount ?? 0, earning.currency ?? "USD");
   });
 
 earningsCmd
@@ -428,7 +432,7 @@ earningsCmd
   .option("--verification-source <source>", "How this was confirmed (e.g. 'checked HackerOne dashboard 2026-09-09'). Omit to leave UNVERIFIED.")
   .option("--who <who>", "Telegram user id or operator name, for the revenue audit trail", "cli-local-operator")
   .description("Records that an already-awarded bounty was actually paid. Only PAID counts toward realized revenue (section 45 — never fabricated). Stays UNVERIFIED unless --verification-source is given.")
-  .action((earningId: string, opts) => {
+  .action(async (earningId: string, opts) => {
     const existing = getEarning(earningId);
     if (!existing) {
       console.error("Earning not found.");
@@ -446,6 +450,15 @@ earningsCmd
       reason: opts.verificationSource ?? "",
     });
     console.log(`Earning ${earning.id} -> paid ($${earning.amount} ${earning.currency}), verification=${earning.verificationStatus}`);
+
+    const program = getProgram(earning.programId);
+    await bountyPaidAlert(program?.name ?? "unknown program", earning.amount ?? 0, earning.currency ?? "USD", earning.verificationStatus === "VERIFIED");
+
+    const milestones = checkGoalMilestones();
+    for (const m of milestones) {
+      console.log(`Goal milestone: "${m.progress.goal.name}" reached ${m.thresholdPct}%`);
+      await goalMilestoneAlert(m.progress.goal.name, m.thresholdPct);
+    }
   });
 
 earningsCmd

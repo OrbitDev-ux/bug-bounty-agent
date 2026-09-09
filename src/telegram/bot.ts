@@ -16,15 +16,33 @@ import { log } from "../logging/logger.js";
 import { listTasks } from "../domain/tasks.js";
 import { listFindings } from "../domain/findings.js";
 import { listApprovals } from "../domain/approvals.js";
-import { listPrograms } from "../domain/programs.js";
-import { summarizeEarnings } from "../domain/earnings.js";
-import { getSettings, updateSettings } from "../domain/settings.js";
+import { listPrograms, getProgram } from "../domain/programs.js";
+import { listGoalProgress } from "../domain/goals.js";
+import { getSettings, updateSettings, setQuietUntil } from "../domain/settings.js";
 import { getSchedulerState } from "../domain/schedulerState.js";
 import { listResearchSessions } from "../domain/researchSessions.js";
 import { buildDailySummary, formatDailySummaryMessage } from "./dailySummary.js";
 import { handleChatText, switchToFreechat, switchToAgentChat, confirmControlAction } from "./chatHandler.js";
+import {
+  mainMenuKeyboard,
+  mainMenuText,
+  formatFindingsList,
+  formatFindingDetail,
+  findingsFilterKeyboard,
+  findingsPaginationKeyboard,
+  formatProgramsList,
+  formatProgramDetail,
+  formatEarnings,
+  earningsPeriodKeyboard,
+  formatAnalytics,
+  formatGoalsList,
+  formatTasksList,
+  EARNINGS_PERIODS,
+  type EarningsPeriod,
+  type FindingFilter,
+} from "./views.js";
 import * as safari from "../safari/controller.js";
-import type { Capability } from "../domain/types.js";
+import type { Capability, NotificationPreferences } from "../domain/types.js";
 
 let bot: Bot | null = null;
 
@@ -45,18 +63,22 @@ export function getBot(): Bot {
 }
 
 const HELP_TEXT = [
-  "Bug Bounty Agent commands:",
+  "Bug Bounty Agent — Mobile Control Center",
   "",
+  "/start — main menu",
   "/status — agent status, queue, approvals",
-  "/tasks — recent tasks",
-  "/findings — recent findings",
+  "/tasks — task queue",
+  "/findings — findings (filterable, paginated)",
   "/approvals — pending approvals (with buttons)",
   "/programs — tracked programs",
-  "/earnings — paid/pending revenue",
+  "/earnings [today|week|month|lastmonth|90d|all] — revenue",
+  "/analytics — funnel, conversion rates, top program/category",
+  "/goals — revenue goal progress",
   "/settings — view/change safe operator settings",
   "/pause, /resume — control the scheduler",
+  "/quiet [minutes], /unquiet — mute non-critical alerts",
   "/chat — AI chat grounded in live agent state (allowlisted users only)",
-  "/freechat — general AI conversation, no agent data or actions",
+  "/freechat, /exit — general AI conversation, no agent data or actions",
 ].join("\n");
 
 function requireAllowlisted(telegramUserId: number): boolean {
@@ -66,11 +88,11 @@ function requireAllowlisted(telegramUserId: number): boolean {
 function wireHandlers(b: Bot): void {
   b.command("start", async (ctx) => {
     const allowed = ctx.from ? requireAllowlisted(ctx.from.id) : false;
-    await ctx.reply(
-      allowed
-        ? "Bug Bounty Agent connected. /help for commands, /status to check the agent, or just talk via /chat."
-        : "This bot only accepts commands from its configured allowlist. Ask the operator to add your Telegram user id to TELEGRAM_ALLOWED_USER_IDS. You can still use /freechat.",
-    );
+    if (!allowed) {
+      await ctx.reply("This bot only accepts commands from its configured allowlist. Ask the operator to add your Telegram user id to TELEGRAM_ALLOWED_USER_IDS. You can still use /freechat.");
+      return;
+    }
+    await ctx.reply(mainMenuText(), { reply_markup: mainMenuKeyboard() });
   });
 
   b.command("help", async (ctx) => {
@@ -84,16 +106,21 @@ function wireHandlers(b: Bot): void {
 
   b.command("tasks", async (ctx) => {
     if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
-    const tasks = listTasks().slice(0, 10);
-    if (tasks.length === 0) return void ctx.reply("No tasks.");
-    await ctx.reply(tasks.map((t) => `${t.type} [${t.status}] ${t.target}`).join("\n"));
+    await ctx.reply(formatTasksList(listTasks()));
   });
 
   b.command("findings", async (ctx) => {
     if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
-    const findings = listFindings().slice(0, 10);
-    if (findings.length === 0) return void ctx.reply("No findings.");
-    await ctx.reply(findings.map((f) => `${f.title} [${f.status}]${f.duplicateVerdict ? ` (${f.duplicateVerdict})` : ""}`).join("\n"));
+    await sendFindingsPage(ctx, "all", 0);
+  });
+
+  b.command("finding", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    const ref = ctx.match?.toString().trim().replace(/^#/, "");
+    const finding = ref ? listFindings().find((f) => f.id === ref || f.id.startsWith(ref)) : undefined;
+    if (!finding) return void ctx.reply("Usage: /finding <id-or-prefix> — id shown in /findings.");
+    const program = getProgram(finding.programId);
+    await ctx.reply(formatFindingDetail(finding, program?.name ?? "unknown"));
   });
 
   b.command("approvals", async (ctx) => {
@@ -107,17 +134,32 @@ function wireHandlers(b: Bot): void {
 
   b.command("programs", async (ctx) => {
     if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
-    const programs = listPrograms();
-    if (programs.length === 0) return void ctx.reply("No programs.");
-    await ctx.reply(programs.map((p) => `${p.name} [${p.status}] automation=${p.policy.automationAllowed}`).join("\n"));
+    await ctx.reply(formatProgramsList(listPrograms()));
+  });
+
+  b.command("program", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    const ref = ctx.match?.toString().trim();
+    const program = ref ? listPrograms().find((p) => p.id === ref || p.id.startsWith(ref) || p.name.toLowerCase() === ref.toLowerCase()) : undefined;
+    if (!program) return void ctx.reply("Usage: /program <id-or-name> — see /programs for the list.");
+    await ctx.reply(formatProgramDetail(program));
   });
 
   b.command("earnings", async (ctx) => {
     if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
-    const s = summarizeEarnings();
-    await ctx.reply(
-      [`Today: $${s.today.toFixed(2)}`, `This month: $${s.thisMonth.toFixed(2)}`, `All time (paid): $${s.allTime.toFixed(2)}`, `Pending: $${s.pending.toFixed(2)}`].join("\n"),
-    );
+    const arg = ctx.match?.toString().trim().toLowerCase();
+    const period: EarningsPeriod = (EARNINGS_PERIODS as readonly string[]).includes(arg ?? "") ? (arg as EarningsPeriod) : "all";
+    await ctx.reply(formatEarnings(period), { reply_markup: earningsPeriodKeyboard(period) });
+  });
+
+  b.command("analytics", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    await ctx.reply(formatAnalytics());
+  });
+
+  b.command("goals", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    await ctx.reply(formatGoalsList(listGoalProgress()));
   });
 
   b.command("settings", async (ctx) => {
@@ -135,6 +177,20 @@ function wireHandlers(b: Bot): void {
     await ctx.reply(await confirmControlAction("CONTROL_AGENT_RESUME"));
   });
 
+  b.command("quiet", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    const minutesArg = Number(ctx.match?.toString().trim());
+    const minutes = Number.isFinite(minutesArg) && minutesArg > 0 ? minutesArg : 60;
+    setQuietUntil(new Date(Date.now() + minutes * 60_000).toISOString());
+    await ctx.reply(`🔇 Quiet for ${minutes} minute(s). Critical alerts (Safari down, repeated failures) still get through. Use /unquiet to cancel early.`);
+  });
+
+  b.command("unquiet", async (ctx) => {
+    if (!ctx.from || !requireAllowlisted(ctx.from.id)) return void ctx.reply("Not authorized.");
+    setQuietUntil(null);
+    await ctx.reply("🔊 Quiet mode off.");
+  });
+
   b.command("chat", async (ctx) => {
     if (!ctx.from) return;
     await ctx.reply(switchToAgentChat(String(ctx.from.id)));
@@ -145,8 +201,51 @@ function wireHandlers(b: Bot): void {
     await ctx.reply(switchToFreechat(String(ctx.from.id)));
   });
 
+  b.command("exit", async (ctx) => {
+    if (!ctx.from) return;
+    await ctx.reply(switchToAgentChat(String(ctx.from.id)));
+  });
+
   b.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
+    if (data === "noop") return void ctx.answerCallbackQuery();
+
+    // Main menu (section 6) — each item re-delivers the equivalent command's content.
+    const menuMatch = data.match(/^menu:(chat|research|approvals|tasks|findings|programs|earnings|analytics|settings|status)$/);
+    if (menuMatch) {
+      if (!requireAllowlisted(ctx.from.id)) return void ctx.answerCallbackQuery({ text: "Not authorized." });
+      await ctx.answerCallbackQuery();
+      await handleMenuSelection(ctx, menuMatch[1]!);
+      return;
+    }
+
+    // Findings filter/pagination (section 14).
+    const findingsFilterMatch = data.match(/^findings:filter:(.+)$/);
+    if (findingsFilterMatch) {
+      if (!requireAllowlisted(ctx.from.id)) return void ctx.answerCallbackQuery({ text: "Not authorized." });
+      await ctx.answerCallbackQuery();
+      await editFindingsPage(ctx, findingsFilterMatch[1] as FindingFilter, 0);
+      return;
+    }
+    const findingsPageMatch = data.match(/^findings:page:(\d+):(.+)$/);
+    if (findingsPageMatch) {
+      if (!requireAllowlisted(ctx.from.id)) return void ctx.answerCallbackQuery({ text: "Not authorized." });
+      await ctx.answerCallbackQuery();
+      await editFindingsPage(ctx, findingsPageMatch[2] as FindingFilter, Number(findingsPageMatch[1]));
+      return;
+    }
+
+    // Earnings period switch (section 21).
+    const earningsPeriodMatch = data.match(/^earnings:period:(.+)$/);
+    if (earningsPeriodMatch) {
+      if (!requireAllowlisted(ctx.from.id)) return void ctx.answerCallbackQuery({ text: "Not authorized." });
+      const period = earningsPeriodMatch[1] as EarningsPeriod;
+      await ctx.answerCallbackQuery();
+      if (ctx.callbackQuery.message) {
+        await ctx.editMessageText(formatEarnings(period), { reply_markup: earningsPeriodKeyboard(period) });
+      }
+      return;
+    }
 
     // Control-action confirmations (from /chat's natural-language pause/resume flow — section 9).
     const controlMatch = data.match(/^control:(CONTROL_AGENT_PAUSE|CONTROL_AGENT_RESUME):confirm$/);
@@ -175,9 +274,13 @@ function wireHandlers(b: Bot): void {
       const [, kind, value] = data.split(":");
       if (kind === "toggle" && (value === "dailySummaryEnabled" || value === "researchEnabled")) {
         const current = getSettings();
-        updateSettings({ [value]: !current[value] });
+        updateSettings({ [value]: !current[value as "dailySummaryEnabled" | "researchEnabled"] });
       } else if (kind === "notif" && (value === "all" || value === "important" || value === "none")) {
         updateSettings({ notificationLevel: value });
+      } else if (kind === "notify" && value) {
+        const current = getSettings();
+        const key = value as keyof NotificationPreferences;
+        updateSettings({ notifications: { [key]: !current.notifications[key] } });
       }
       await ctx.answerCallbackQuery({ text: "Updated." });
       if (ctx.callbackQuery.message) {
@@ -230,6 +333,61 @@ function wireHandlers(b: Bot): void {
   });
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleMenuSelection(ctx: any, item: string): Promise<void> {
+  switch (item) {
+    case "chat":
+      await ctx.reply(switchToAgentChat(String(ctx.from.id)));
+      return;
+    case "research":
+      await ctx.reply("Kick off research from the CLI (`bba program research <id> \"<goal>\"`) or ask in /chat, e.g. \"새 프로그램 조사해줘\".");
+      return;
+    case "approvals": {
+      const pending = listApprovals("pending");
+      if (pending.length === 0) return void ctx.reply("No pending approvals.");
+      for (const a of pending.slice(0, 5)) await ctx.reply(`#${a.id.slice(0, 8)}\n${a.requestedAction}`, { reply_markup: approvalInlineKeyboard(a.id) });
+      return;
+    }
+    case "tasks":
+      await ctx.reply(formatTasksList(listTasks()));
+      return;
+    case "findings":
+      await sendFindingsPage(ctx, "all", 0);
+      return;
+    case "programs":
+      await ctx.reply(formatProgramsList(listPrograms()));
+      return;
+    case "earnings":
+      await ctx.reply(formatEarnings("all"), { reply_markup: earningsPeriodKeyboard("all") });
+      return;
+    case "analytics":
+      await ctx.reply(formatAnalytics());
+      return;
+    case "settings":
+      await ctx.reply(renderSettings(), { reply_markup: settingsKeyboard() });
+      return;
+    case "status":
+      await ctx.reply(await renderStatus());
+      return;
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function sendFindingsPage(ctx: any, filter: FindingFilter, page: number): Promise<void> {
+  const { text, totalPages } = formatFindingsList(listFindings(), filter, page);
+  await ctx.reply(text, { reply_markup: findingsFilterKeyboard(filter) });
+  if (totalPages > 1) {
+    await ctx.reply(`Page ${page + 1}/${totalPages}`, { reply_markup: findingsPaginationKeyboard(filter, page, totalPages) });
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function editFindingsPage(ctx: any, filter: FindingFilter, page: number): Promise<void> {
+  const { text, totalPages } = formatFindingsList(listFindings(), filter, page);
+  if (!ctx.callbackQuery.message) return;
+  await ctx.editMessageText(text, { reply_markup: totalPages > 1 ? findingsPaginationKeyboard(filter, page, totalPages) : findingsFilterKeyboard(filter) });
+}
+
 function renderSettings(): string {
   const s = getSettings();
   return [
@@ -240,8 +398,20 @@ function renderSettings(): string {
     `Agent Auto Start: ${s.agentAutoStart ? "on" : "off"}`,
     `Research Enabled: ${s.researchEnabled ? "on" : "off"}`,
     "",
+    "Alerts:",
+    `  Findings: ${s.notifications.findingAlerts ? "on" : "off"}`,
+    `  Approvals: ${s.notifications.approvalAlerts ? "on" : "off"}`,
+    `  Agent Errors: ${s.notifications.agentErrors ? "on" : "off"} (critical alerts always get through regardless)`,
+    `  Bounty: ${s.notifications.bountyAlerts ? "on" : "off"}`,
+    `  Daily Summary: ${s.notifications.dailySummary ? "on" : "off"}`,
+    `  Weekly Summary: ${s.notifications.weeklySummary ? "on" : "off"}`,
+    `  Goals: ${s.notifications.goalAlerts ? "on" : "off"}`,
+    s.quietUntil ? `\nQuiet until: ${s.quietUntil}` : "",
+    "",
     "(Scope checks, policy enforcement, and human approval gates are not configurable — always on.)",
-  ].join("\n");
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
 }
 
 function settingsKeyboard(): InlineKeyboard {
@@ -249,9 +419,16 @@ function settingsKeyboard(): InlineKeyboard {
     .text("Toggle Daily Summary", "settings:toggle:dailySummaryEnabled")
     .text("Toggle Research", "settings:toggle:researchEnabled")
     .row()
-    .text("Notifications: all", "settings:notif:all")
+    .text("Notif: all", "settings:notif:all")
     .text("important", "settings:notif:important")
-    .text("none", "settings:notif:none");
+    .text("none", "settings:notif:none")
+    .row()
+    .text("💰 Bounty", "settings:notify:bountyAlerts")
+    .text("🐛 Findings", "settings:notify:findingAlerts")
+    .text("🎯 Goals", "settings:notify:goalAlerts")
+    .row()
+    .text("📊 Daily", "settings:notify:dailySummary")
+    .text("📈 Weekly", "settings:notify:weeklySummary");
 }
 
 async function renderStatus(): Promise<string> {

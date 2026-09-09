@@ -21,7 +21,7 @@ import { listGoalProgress } from "../domain/goals.js";
 import { getSettings, updateSettings, setQuietUntil } from "../domain/settings.js";
 import { getSchedulerState } from "../domain/schedulerState.js";
 import { listResearchSessions } from "../domain/researchSessions.js";
-import { buildDailySummary, formatDailySummaryMessage } from "./dailySummary.js";
+import { buildDailySummary, formatDailySummaryMessage, buildWeeklySummary, formatWeeklySummaryMessage } from "./dailySummary.js";
 import { handleChatText, switchToFreechat, switchToAgentChat, confirmControlAction } from "./chatHandler.js";
 import {
   mainMenuKeyboard,
@@ -531,6 +531,17 @@ export async function sendDailySummary(): Promise<RequestApprovalResult["deliver
   if (status !== "ready") return false;
   const b = getBot();
   const text = formatDailySummaryMessage(buildDailySummary());
+  for (const chatId of env.telegramAllowedUserIds) {
+    await b.api.sendMessage(chatId, text);
+  }
+  return true;
+}
+
+export async function sendWeeklySummary(): Promise<RequestApprovalResult["delivered"]> {
+  const status = telegramConfigStatus();
+  if (status !== "ready") return false;
+  const b = getBot();
+  const text = formatWeeklySummaryMessage(buildWeeklySummary());
   for (const chatId of env.telegramAllowedUserIds) {
     await b.api.sendMessage(chatId, text);
   }

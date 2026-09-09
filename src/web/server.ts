@@ -46,10 +46,32 @@ async function readBody(req: IncomingMessage): Promise<URLSearchParams> {
   return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
 }
 
-async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+/**
+ * CSRF mitigation (found during the security review, section 40-class
+ * issue): this server has no auth of its own beyond the Telegram allowlist
+ * check on the one state-changing decide endpoint — a malicious page open
+ * in the SAME browser as the dashboard could otherwise auto-submit a POST
+ * to 127.0.0.1. Browsers attach an Origin header to cross-origin form
+ * submissions; reject any POST whose Origin doesn't match this server. A
+ * request with no Origin header (curl, the CLI, same-origin fetches in
+ * some older browsers) is allowed through — this only blocks the
+ * browser-enforced cross-origin case, which is the actual CSRF threat model
+ * here. Documented residual risk in docs/dashboard.md.
+ */
+export function isSameOriginOrNoOrigin(req: IncomingMessage, host: string, port: number): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  return origin === `http://${host}:${port}` || origin === `http://localhost:${port}`;
+}
+
+async function handleRequest(req: IncomingMessage, res: ServerResponse, host: string, port: number): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
   const method = req.method ?? "GET";
+
+  if (method === "POST" && !isSameOriginOrNoOrigin(req, host, port)) {
+    return sendHtml(res, 403, "Cross-origin POST rejected.");
+  }
 
   try {
     if (method === "GET" && path === "/") return sendHtml(res, 200, await renderOverview());
@@ -141,7 +163,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
 export function startWebDashboard(port = 4173, host = "127.0.0.1") {
   const server = createServer((req, res) => {
-    void handleRequest(req, res);
+    void handleRequest(req, res, host, port);
   });
   server.listen(port, host, () => {
     console.log(`Web dashboard listening on http://${host}:${port}`);
